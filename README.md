@@ -13,7 +13,7 @@ Analiza wielkości ziaren ze zdjęcia — **bez trenowania**, na gotowych modela
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
-pytest            # testy bez modeli (syntetyczna scena + ArUco)
+pytest            # (pip install -r requirements-dev.txt) testy bez modeli (syntetyczna scena + ArUco)
 ```
 Modele pobierają się z Hugging Face przy pierwszym uruchomieniu (SAM ViT-B ≈ 375 MB).
 
