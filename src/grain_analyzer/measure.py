@@ -28,33 +28,40 @@ def feret_diameters(contour: np.ndarray, n_angles: int = 180) -> tuple[float, fl
     return float(widths.max() + 1), float(widths.min() + 1)
 
 
+def grain_geometry(mask: np.ndarray, mm_per_px: float) -> dict | None:
+    """Geometry of one mask (bool array, any size). Lengths in mm, area in mm²."""
+    cnt = _largest_contour(mask)
+    if cnt is None or len(cnt) < 5:
+        return None
+    area_px = float(mask.sum())
+    perim = cv2.arcLength(cnt, True)
+    fmax, fmin = feret_diameters(cnt)
+    (_, _), (ea, eb), _ = cv2.fitEllipse(cnt)
+    m = float(mm_per_px)
+    ys, xs = np.nonzero(mask)
+    return {
+        "area_mm2": area_px * m * m,
+        "ecd_mm": 2 * np.sqrt(area_px / np.pi) * m,
+        "feret_max_mm": fmax * m,
+        "feret_min_mm": fmin * m,
+        "major_mm": max(ea, eb) * m,
+        "minor_mm": min(ea, eb) * m,
+        "aspect_ratio": fmax / max(fmin, 1e-9),
+        "circularity": float(min(1.0, 4 * np.pi * area_px / max(perim, 1e-9) ** 2)),
+        "cx_px": float(xs.mean()), "cy_px": float(ys.mean()),
+    }
+
+
 def measure_grains(masks: list[np.ndarray], mm_per_px: float,
                    depth: np.ndarray | None = None, ring_px: int = 15) -> pd.DataFrame:
-    """One row per grain; ``mask_idx`` points back into ``masks``. Lengths in mm, area in mm², ``rel_height`` unit-less."""
+    """One row per grain; ``mask_idx`` points back into ``masks``."""
     union = np.any(masks, axis=0) if masks else None
     rows = []
     for idx, mask in enumerate(masks):
-        cnt = _largest_contour(mask)
-        if cnt is None or len(cnt) < 5:
+        row = grain_geometry(mask, mm_per_px)
+        if row is None:
             continue
-        area_px = float(mask.sum())
-        perim = cv2.arcLength(cnt, True)
-        fmax, fmin = feret_diameters(cnt)
-        (_, _), (ea, eb), _ = cv2.fitEllipse(cnt)
-        m = float(mm_per_px)
-        row = {
-            "mask_idx": idx,
-            "area_mm2": area_px * m * m,
-            "ecd_mm": 2 * np.sqrt(area_px / np.pi) * m,
-            "feret_max_mm": fmax * m,
-            "feret_min_mm": fmin * m,
-            "major_mm": max(ea, eb) * m,
-            "minor_mm": min(ea, eb) * m,
-            "aspect_ratio": fmax / max(fmin, 1e-9),
-            "circularity": float(min(1.0, 4 * np.pi * area_px / max(perim, 1e-9) ** 2)),
-        }
-        ys, xs = np.nonzero(mask)
-        row["cx_px"], row["cy_px"] = float(xs.mean()), float(ys.mean())
+        row = {"mask_idx": idx, **row}
         if depth is not None:
             k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * ring_px + 1,) * 2)
             ring = cv2.dilate(mask.astype(np.uint8), k).astype(bool) & ~union

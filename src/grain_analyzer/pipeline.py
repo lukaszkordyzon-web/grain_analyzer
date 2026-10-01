@@ -44,6 +44,9 @@ class AnalysisResult:
     size_column: str
     percentiles: dict[str, float] = field(default_factory=dict)
     n_rejected_depth: int = 0
+    contours: list | None = None          # full-frame contours (drone mode; masks not kept)
+    annotations: dict = field(default_factory=dict)   # person/roi markers for the overlay
+    notes: list = field(default_factory=list)         # warnings shown next to the results
 
     @property
     def sizes(self) -> np.ndarray:
@@ -99,3 +102,63 @@ def analyze(image_rgb: np.ndarray, p: Params, segmenter: Segmenter,
     col = {"ecd": "ecd_mm", "feret_min": "feret_min_mm", "feret_max": "feret_max_mm"}[p.size_metric]
     perc = size_distribution(grains[col].to_numpy(), p.weighting) if len(grains) else {}
     return AnalysisResult(image, scale, masks, grains, depth, col, perc, n_rej)
+
+
+@dataclass
+class DroneParams:
+    max_side: int = 2000
+    person_height_m: float = 1.75
+    pitch_deg: float = 45.0               # camera depression, 90 = straight down
+    focal_35mm: float = 24.0
+    tile: int = 800
+    min_diameter_px: float = 12.0         # below this a rock is not resolved
+    max_area_frac: float = 0.02           # of the selected area
+    max_overlap: float = 0.4
+    size_metric: str = "ecd"
+    weighting: str = "volume"
+
+
+def analyze_drone(image_rgb: np.ndarray, p: DroneParams, segmenter: Segmenter, depth_estimator,
+                  head_xy, feet_xy, roi_xyxy=None, progress=None) -> AnalysisResult:
+    """Oblique drone photo, person of known height as the scale reference.
+    Points/ROI are in *original* image pixels."""
+    from . import drone
+    from .camera import focal_px
+
+    if p.size_metric not in SIZE_METRICS:
+        raise ValueError(f"size_metric must be one of {list(SIZE_METRICS)}")
+    image = resize_max_side(image_rgb, p.max_side)
+    k = image.shape[1] / image_rgb.shape[1]
+    h, w = image.shape[:2]
+    head = (head_xy[0] * k, head_xy[1] * k)
+    feet = (feet_xy[0] * k, feet_xy[1] * k)
+    roi = (0, 0, w, h) if roi_xyxy is None else tuple(int(round(v * k)) for v in roi_xyxy)
+    roi = (max(0, roi[0]), max(0, roi[1]), min(w, roi[2]), min(h, roi[3]))
+    if roi[2] - roi[0] < 50 or roi[3] - roi[1] < 50:
+        raise ValueError("Zaznaczony obszar hałdy jest zbyt mały.")
+
+    f = focal_px(p.focal_35mm, w, h)
+    if progress:
+        progress(0.0, "Głębia metryczna…")
+    depth = depth_estimator.estimate(image)
+    cal = drone._calibrate(head, feet, depth, f, p.pitch_deg, p.person_height_m, w / 2, h / 2)
+    smap = drone.scale_map(depth, cal, head, feet)
+
+    roi_area = (roi[2] - roi[0]) * (roi[3] - roi[1])
+    labels, boxes = drone.build_labels(
+        image, segmenter, roi, tile=p.tile, min_area_px=int(np.pi / 4 * p.min_diameter_px ** 2),
+        max_area_px=int(p.max_area_frac * roi_area), max_overlap=p.max_overlap, progress=progress)
+    grains, contours = drone.measure_labels(labels, boxes, smap, depth)
+
+    col = {"ecd": "ecd_mm", "feret_min": "feret_min_mm", "feret_max": "feret_max_mm"}[p.size_metric]
+    perc = size_distribution(grains[col].to_numpy(), p.weighting) if len(grains) else {}
+    coverage = float((labels[roi[1]:roi[3], roi[0]:roi[2]] > 0).mean())
+    notes = list(cal.warnings)
+    notes.append(f"Pokrycie obszaru zmierzonymi kamieniami: {coverage:.0%}. Drobniejsza frakcja "
+                 f"(średnica < {p.min_diameter_px:.0f} px ≈ "
+                 f"{p.min_diameter_px * float(np.median(smap[roi[1]:roi[3], roi[0]:roi[2]])) / 10:.0f} cm "
+                 "w środku obszaru) nie jest mierzona — D10 jest przez to zawyżone.")
+    scale = scale_mod.ScaleResult(float(grains["mm_per_px"].median()) if len(grains) else 0.0,
+                                  "person")
+    return AnalysisResult(image, scale, [], grains, depth, col, perc, 0, contours,
+                          {"head": head, "feet": feet, "roi": roi}, notes)

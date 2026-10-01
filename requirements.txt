@@ -5,6 +5,7 @@ matplotlib>=3.7
 pillow>=10.0
 opencv-contrib-python-headless>=4.8   # cv2.aruco (ArucoDetector)
 streamlit>=1.50
+streamlit-image-coordinates>=0.2
 torch>=2.1
 torchvision                           # required by SAM mask-generation (batched_nms)
 transformers>=4.45                    # SAM (mask-generation) + Depth Anything V2 (depth-estimation)

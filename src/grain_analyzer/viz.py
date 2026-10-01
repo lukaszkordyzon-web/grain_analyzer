@@ -13,9 +13,17 @@ from .stats import histogram  # noqa: E402
 
 def draw_overlay(result, show_ids: bool = False, thickness: int = 1) -> np.ndarray:
     out = result.image.copy()
+    if result.contours is not None:
+        cv2.drawContours(out, result.contours, -1, (0, 255, 0), thickness)
     for m in result.masks:
         cnts, _ = cv2.findContours(m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cv2.drawContours(out, cnts, -1, (0, 255, 0), thickness)
+    ann = result.annotations
+    if "roi" in ann:
+        x0, y0, x1, y1 = ann["roi"]
+        cv2.rectangle(out, (x0, y0), (x1, y1), (255, 160, 0), 2)
+    if "head" in ann:
+        cv2.line(out, tuple(map(int, ann["head"])), tuple(map(int, ann["feet"])), (255, 0, 255), 2)
     if result.scale.corners is not None:
         cv2.polylines(out, [result.scale.corners.astype(np.int32)], True, (255, 0, 0), 2)
     if show_ids:
