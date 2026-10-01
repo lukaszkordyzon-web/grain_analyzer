@@ -48,12 +48,12 @@ with st.sidebar:
 
     st.header("Modele")
     sam_name = st.selectbox("Segmentacja", list(SAM_MODELS))
-    use_depth = st.checkbox("Użyj głębi (Depth Anything V2)", True)
+    use_depth = st.checkbox("Użyj głębi (Depth Anything V2) — więcej RAM", False)
     depth_name = st.selectbox("Model głębi", list(DEPTH_MODELS), disabled=not use_depth)
     reject = st.checkbox("Odrzucaj obiekty z tła (wg głębi)", True, disabled=not use_depth)
 
     st.header("Filtrowanie masek")
-    max_side = st.slider("Maks. rozdzielczość [px]", 800, 3000, 1600, 100)
+    max_side = st.slider("Maks. rozdzielczość [px]", 800, 3000, 1200, 100)
     min_area = st.slider("Min. pole ziarna [px]", 20, 2000, 150)
     max_frac = st.slider("Maks. pole ziarna [% kadru]", 0.5, 30.0, 5.0) / 100
 
@@ -73,6 +73,9 @@ image = np.array(ImageOps.exif_transpose(Image.open(upload)).convert("RGB"))
 st.image(image, caption=f"{image.shape[1]}×{image.shape[0]} px", width=400)
 
 if st.button("Analizuj", type="primary"):
+    import gc
+    st.session_state.pop("result", None)
+    gc.collect()
     params = Params(max_side=max_side, marker_size_mm=marker_mm, marker_dict=marker_dict,
                     marker_id=marker_id, manual_mm_per_px=mm_per_px, min_area_px=min_area,
                     max_area_frac=max_frac, use_depth=use_depth,
@@ -107,14 +110,14 @@ if res.n_rejected_depth:
 t1, t2, t3 = st.tabs(["Kontury", "Histogram", "Dane"])
 with t1:
     ids = st.checkbox("Numery ziaren")
-    st.image(draw_overlay(res, ids), use_container_width=True)
+    st.image(draw_overlay(res, ids), width="stretch")
     if res.depth is not None:
         with st.expander("Mapa głębi (względna)"):
-            st.image(depth_preview(res.depth), use_container_width=True)
+            st.image(depth_preview(res.depth), width="stretch")
 with t2:
     st.pyplot(plot_histogram(res.sizes, res.percentiles, label, wt, bins))
 with t3:
-    st.dataframe(res.grains.round(3), use_container_width=True)
+    st.dataframe(res.grains.round(3), width="stretch")
     d1, d2 = st.columns(2)
     d1.download_button("Pobierz ziarna (CSV)", grains_csv(res), "ziarna.csv", "text/csv")
     d2.download_button("Pobierz podsumowanie (CSV)", summary_csv(res, label, wt),

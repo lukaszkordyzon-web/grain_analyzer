@@ -16,7 +16,7 @@ from .stats import size_distribution
 
 @dataclass
 class Params:
-    max_side: int = 1600                 # working resolution (long side, px)
+    max_side: int = 1200                 # working resolution (long side, px)
     # scale
     marker_size_mm: float = 20.0
     marker_dict: str = "4x4_50"

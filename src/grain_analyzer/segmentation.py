@@ -21,7 +21,7 @@ class SamSegmenter:
     """Wraps the HF ``mask-generation`` pipeline (SAM). Model is loaded lazily."""
 
     def __init__(self, model_id: str = "facebook/sam-vit-base", device: str | None = None,
-                 points_per_batch: int = 64, pred_iou_thresh: float = 0.88,
+                 points_per_batch: int = 32, pred_iou_thresh: float = 0.88,
                  stability_score_thresh: float = 0.92):
         self.model_id = model_id
         self.device = device
