@@ -10,7 +10,7 @@ from PIL import Image, ImageOps
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from grain_analyzer.camera import DEFAULT_FOCAL_35MM, read_camera_meta  # noqa: E402
-from grain_analyzer.depth import DEPTH_MODELS, METRIC_DEPTH_MODELS, DepthEstimator  # noqa: E402
+from grain_analyzer.depth import DEPTH_MODELS, DepthEstimator  # noqa: E402
 from grain_analyzer.export import grains_csv, summary_csv  # noqa: E402
 from grain_analyzer.measure import SIZE_METRICS  # noqa: E402
 from grain_analyzer.pipeline import DroneParams, Params, analyze, analyze_drone  # noqa: E402
@@ -31,8 +31,8 @@ def get_segmenter(model_id: str) -> SamSegmenter:
 
 
 @st.cache_resource(show_spinner="Ładowanie modelu głębi…")
-def get_depth(model_id: str, metric: bool = False) -> DepthEstimator:
-    return DepthEstimator(model_id, metric=metric)
+def get_depth(model_id: str) -> DepthEstimator:
+    return DepthEstimator(model_id)
 
 
 def results_view(res, label, wt, bins):
@@ -53,7 +53,7 @@ def results_view(res, label, wt, bins):
     with t1:
         ids = st.checkbox("Numery ziaren")
         st.image(draw_overlay(res, ids), width="stretch")
-        if res.depth is not None and res.scale.method != "person":
+        if res.depth is not None and not res.scale.method.startswith("człowiek"):
             with st.expander("Mapa głębi (względna)"):
                 st.image(depth_preview(res.depth), width="stretch")
     with t2:
@@ -151,7 +151,6 @@ else:
 
         st.header("Segmentacja")
         sam_name = st.selectbox("Model SAM", list(SAM_MODELS))
-        depth_name = st.selectbox("Model głębi (metryczny)", list(METRIC_DEPTH_MODELS))
         max_side = st.slider("Rozdzielczość robocza [px]", 1000, 4000, 2000, 250)
         tile = st.slider("Rozmiar kafelka [px]", 500, 1200, 800, 50,
                          help="Mniejszy kafelek = drobniejsze kamienie, ale dłużej.")
@@ -215,7 +214,6 @@ else:
         try:
             st.session_state.result = analyze_drone(
                 image, p, get_segmenter(SAM_MODELS[sam_name]),
-                get_depth(METRIC_DEPTH_MODELS[depth_name], metric=True),
                 pts["head"], pts["feet"], (x0, y0, x1, y1), progress=lambda f, t: bar.progress(f, t))
             st.session_state.meta = (SIZE_METRICS[metric], weighting, bins)
         except ValueError as e:

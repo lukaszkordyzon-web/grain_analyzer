@@ -118,10 +118,16 @@ class DroneParams:
     weighting: str = "volume"
 
 
-def analyze_drone(image_rgb: np.ndarray, p: DroneParams, segmenter: Segmenter, depth_estimator,
-                  head_xy, feet_xy, roi_xyxy=None, progress=None) -> AnalysisResult:
+def analyze_drone(image_rgb: np.ndarray, p: DroneParams, segmenter: Segmenter,
+                  head_xy, feet_xy, roi_xyxy=None, progress=None,
+                  depth_estimator=None) -> AnalysisResult:
     """Oblique drone photo, person of known height as the scale reference.
-    Points/ROI are in *original* image pixels."""
+    Points/ROI are in *original* image pixels.
+
+    Default scale model: horizontal ground plane through the person's feet (geometry only,
+    from camera pitch + focal length). ``depth_estimator`` (a *metric* depth model) switches to
+    experimental depth-ratio scaling; such models are trained on ground-level scenes and
+    often misjudge aerial views."""
     from . import drone
     from .camera import focal_px
 
@@ -138,11 +144,14 @@ def analyze_drone(image_rgb: np.ndarray, p: DroneParams, segmenter: Segmenter, d
         raise ValueError("Zaznaczony obszar hałdy jest zbyt mały.")
 
     f = focal_px(p.focal_35mm, w, h)
-    if progress:
-        progress(0.0, "Głębia metryczna…")
-    depth = depth_estimator.estimate(image)
+    depth = None
+    if depth_estimator is not None:
+        if progress:
+            progress(0.0, "Głębia metryczna…")
+        depth = depth_estimator.estimate(image)
     cal = drone._calibrate(head, feet, depth, f, p.pitch_deg, p.person_height_m, w / 2, h / 2)
-    smap = drone.scale_map(depth, cal, head, feet)
+    smap = (drone.scale_map(depth, cal, head, feet) if depth is not None
+            else drone.plane_scale_map((h, w), f, p.pitch_deg, feet, cal.z_person_m))
 
     roi_area = (roi[2] - roi[0]) * (roi[3] - roi[1])
     labels, boxes = drone.build_labels(
@@ -154,11 +163,14 @@ def analyze_drone(image_rgb: np.ndarray, p: DroneParams, segmenter: Segmenter, d
     perc = size_distribution(grains[col].to_numpy(), p.weighting) if len(grains) else {}
     coverage = float((labels[roi[1]:roi[3], roi[0]:roi[2]] > 0).mean())
     notes = list(cal.warnings)
+    if depth is None:
+        notes.append("Skala zakłada, że hałda leży w płaszczyźnie terenu, na którym stoi człowiek. "
+                     "Wyższe partie hałdy są bliżej kamery, więc ich rozmiary są lekko zawyżone.")
     notes.append(f"Pokrycie obszaru zmierzonymi kamieniami: {coverage:.0%}. Drobniejsza frakcja "
                  f"(średnica < {p.min_diameter_px:.0f} px ≈ "
                  f"{p.min_diameter_px * float(np.median(smap[roi[1]:roi[3], roi[0]:roi[2]])) / 10:.0f} cm "
                  "w środku obszaru) nie jest mierzona — D10 jest przez to zawyżone.")
     scale = scale_mod.ScaleResult(float(grains["mm_per_px"].median()) if len(grains) else 0.0,
-                                  "person")
+                                  "człowiek" + (" + głębia" if depth is not None else " + płaszczyzna"))
     return AnalysisResult(image, scale, [], grains, depth, col, perc, 0, contours,
                           {"head": head, "feet": feet, "roi": roi}, notes)

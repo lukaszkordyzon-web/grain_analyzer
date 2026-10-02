@@ -85,24 +85,47 @@ class ConstDepth:
         return np.full(img.shape[:2], self.z, np.float32)
 
 
-def test_end_to_end_constant_depth():
+def _scene(max_area=0.05):
     img = np.zeros((1500, 2000, 3), np.uint8)
-    p = DroneParams(max_side=2000, pitch_deg=45, focal_35mm=36.0, tile=2000, max_area_frac=0.05)
-    f = focal_px(36.0, 2000, 1500)
-    # circles are placed in absolute coords: 1 tile covers the whole roi (starts at roi origin)
+    p = DroneParams(max_side=2000, pitch_deg=45, focal_35mm=36.0, tile=2000, max_area_frac=max_area)
     roi = (100, 100, 1900, 1400)
-    circles = [(400 - roi[0], 400 - roi[1], 30), (900 - roi[0], 700 - roi[1], 45),
-               (1400 - roi[0], 900 - roi[1], 60)]
-    z = 25.0
-    res = analyze_drone(img, p, Stub(circles), ConstDepth(z), head_xy=(1500, 300),
-                        feet_xy=(1500, 330), roi_xyxy=roi)
+    abs_circles = [(400, 400, 30), (900, 700, 45), (1400, 1100, 60)]
+    circles = [(x - roi[0], y - roi[1], r) for x, y, r in abs_circles]
+    return img, p, roi, abs_circles, circles
+
+
+def test_plane_scale_map_geometry():
+    f = focal_px(36.0, 2000, 1500)
+    feet = (1500.0, 330.0)
+    z = drone.solve_person_distance((1500, 300), feet, f, W / 2, H / 2, 45, 1.75)
+    s = drone.plane_scale_map((H, W), f, 45, feet, z)
+    assert s[330, 0] == pytest.approx(1000 * z / f, rel=1e-3)     # anchored at the person
+    assert s[1400, 0] < s[700, 0] < s[330, 0] < s[100, 0]         # lower in frame = closer
+    assert np.isfinite(s).all()
+
+
+def test_end_to_end_ground_plane():
+    img, p, roi, abs_circles, circles = _scene()
+    head, feet = (1500, 300), (1500, 330)
+    res = analyze_drone(img, p, Stub(circles), head, feet, roi)
     assert len(res.grains) == 3                   # the giant blob is rejected by max area
-    s = res.grains["mm_per_px"].iloc[0]
-    # all grains share one scale (constant depth), ECD = 2 r * s
-    np.testing.assert_allclose(np.sort(res.grains["ecd_mm"]), np.array([60, 90, 120]) * s,
-                               rtol=0.06)
+    f = focal_px(36.0, 2000, 1500)
+    z = drone.solve_person_distance(head, feet, f, W / 2, H / 2, 45, 1.75)
+    smap = drone.plane_scale_map((H, W), f, 45, feet, z)
+    expected = sorted(2 * r * smap[y, x] for x, y, r in abs_circles)
+    np.testing.assert_allclose(np.sort(res.grains["ecd_mm"]), expected, rtol=0.06)
     assert res.contours is not None and len(res.contours) == 3
     assert "Pokrycie" in " ".join(res.notes)
+
+
+def test_end_to_end_depth_ratio_mode():
+    img, p, roi, abs_circles, circles = _scene()
+    res = analyze_drone(img, p, Stub(circles), (1500, 300), (1500, 330), roi,
+                        depth_estimator=ConstDepth(25.0))
+    s = res.grains["mm_per_px"]
+    assert s.nunique() == 1                       # constant depth -> one scale everywhere
+    np.testing.assert_allclose(np.sort(res.grains["ecd_mm"]), np.array([60, 90, 120]) * s.iloc[0],
+                               rtol=0.06)
 
 
 def test_camera_meta_missing_is_none():

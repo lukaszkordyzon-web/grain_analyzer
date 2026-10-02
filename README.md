@@ -23,7 +23,9 @@ domyślnie 1,75 m) — to jedyna referencja skali.
 1. Wgraj **oryginał** zdjęcia (metadane DJI: kąt gimbala, ogniskowa). Bez nich wpisz je ręcznie.
 2. Kliknij na zdjęciu: czubek głowy, stopy, potem prostokąt obszaru hałdy (bez ścian, kałuż, podłoża).
 3. Z kąta kamery, ogniskowej i rozmiaru człowieka w pikselach liczona jest jego odległość → mm/px
-   w jego miejscu. Dalej skala jest przeliczana wg mapy głębi metrycznej (tylko stosunki głębi).
+   w jego miejscu. Dalej skala wynika z geometrii: teren to płaszczyzna pozioma przez stopy człowieka,
+   a skala zmienia się z wierszem obrazu (bez modelu głębi — modele głębi trenowane na scenach
+   naziemnych mylą się na ujęciach z drona; w kodzie jest opcjonalny tryb eksperymentalny).
 4. SAM działa na nakładających się kafelkach, więc widzi drobniejsze kamienie.
 
 Uwagi: kamienie mniejsze niż „min. średnica [px]” nie są mierzone (D10 jest wtedy zawyżone — aplikacja

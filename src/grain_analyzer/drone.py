@@ -107,6 +107,25 @@ def person_depth(depth_m: np.ndarray, head, feet) -> float:
     return float(np.median(win))
 
 
+def plane_scale_map(shape: tuple[int, int], f_px: float, pitch_deg: float, feet,
+                    z_feet_m: float) -> np.ndarray:
+    """mm per pixel from geometry alone: the ground is a horizontal plane through the
+    person's feet; each pixel's ray hits it at depth Z (along the optical axis) and the
+    scale is Z / f. With zero roll the scale depends on the image row only.
+    Rows at/above the horizon (no ground intersection) get the farthest valid scale."""
+    h, w = shape
+    th = math.radians(pitch_deg)
+    c, s = math.cos(th), math.sin(th)
+    y = (np.arange(h, dtype=np.float64) - h / 2) / f_px
+    g_d = c * y + s                                   # g . ray, per row
+    plane = z_feet_m * (c * (feet[1] - h / 2) / f_px + s)   # g . P_feet
+    z = np.full(h, np.nan)
+    ok = g_d > 0.02
+    z[ok] = plane / g_d[ok]
+    z[~ok] = np.nanmax(z) if ok.any() else z_feet_m
+    return (1000 * z / f_px).astype(np.float32)[:, None] * np.ones((1, w), np.float32)
+
+
 def scale_map(depth_m: np.ndarray, cal: PersonCalibration, head, feet) -> np.ndarray:
     """mm per pixel for every pixel, anchored at the person."""
     z_ref = person_depth(depth_m, head, feet)
