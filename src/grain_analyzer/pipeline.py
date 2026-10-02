@@ -11,7 +11,7 @@ from . import scale as scale_mod
 from .depth import DepthEstimator
 from .measure import SIZE_METRICS, depth_outliers, measure_grains
 from .segmentation import Segmenter, select_grain_masks
-from .stats import size_distribution
+from .stats import passing_bounds, size_distribution
 
 
 @dataclass
@@ -47,6 +47,10 @@ class AnalysisResult:
     contours: list | None = None          # full-frame contours (drone mode; masks not kept)
     annotations: dict = field(default_factory=dict)   # person/roi markers for the overlay
     notes: list = field(default_factory=list)         # warnings shown next to the results
+    weighting: str = "number"
+    roi_area_mm2: float | None = None     # drone mode: ground area of the analysed region
+    min_size_mm: float | None = None      # smallest measurable rock (resolution limit)
+    bounds: dict | None = None            # area passing curves incl. unmeasured fines
 
     @property
     def sizes(self) -> np.ndarray:
@@ -101,7 +105,7 @@ def analyze(image_rgb: np.ndarray, p: Params, segmenter: Segmenter,
 
     col = {"ecd": "ecd_mm", "feret_min": "feret_min_mm", "feret_max": "feret_max_mm"}[p.size_metric]
     perc = size_distribution(grains[col].to_numpy(), p.weighting) if len(grains) else {}
-    return AnalysisResult(image, scale, masks, grains, depth, col, perc, n_rej)
+    return AnalysisResult(image, scale, masks, grains, depth, col, perc, n_rej, weighting=p.weighting)
 
 
 @dataclass
@@ -115,7 +119,7 @@ class DroneParams:
     max_area_frac: float = 0.02           # of the selected area
     max_overlap: float = 0.4
     size_metric: str = "ecd"
-    weighting: str = "volume"
+    weighting: str = "area"               # surface fraction by size (top-view standard)
 
 
 def analyze_drone(image_rgb: np.ndarray, p: DroneParams, segmenter: Segmenter,
@@ -169,8 +173,16 @@ def analyze_drone(image_rgb: np.ndarray, p: DroneParams, segmenter: Segmenter,
     notes.append(f"Pokrycie obszaru zmierzonymi kamieniami: {coverage:.0%}. Drobniejsza frakcja "
                  f"(średnica < {p.min_diameter_px:.0f} px ≈ "
                  f"{p.min_diameter_px * float(np.median(smap[roi[1]:roi[3], roi[0]:roi[2]])) / 10:.0f} cm "
-                 "w środku obszaru) nie jest mierzona — D10 jest przez to zawyżone.")
+                 "w środku obszaru) nie jest mierzona.")
     scale = scale_mod.ScaleResult(float(grains["mm_per_px"].median()) if len(grains) else 0.0,
                                   "człowiek" + (" + głębia" if depth is not None else " + płaszczyzna"))
+    roi_smap = smap[roi[1]:roi[3], roi[0]:roi[2]].astype(np.float64)
+    roi_area_mm2 = float(np.sum(roi_smap ** 2))
+    min_size_mm = float(p.min_diameter_px * np.median(roi_smap))
+    # bracketing the unmeasured fines is only meaningful on an area basis
+    bounds = (passing_bounds(grains[col].to_numpy(), grains["area_mm2"].to_numpy(),
+                             roi_area_mm2, min_size_mm)
+              if len(grains) and p.weighting == "area" else None)
     return AnalysisResult(image, scale, [], grains, depth, col, perc, 0, contours,
-                          {"head": head, "feet": feet, "roi": roi}, notes)
+                          {"head": head, "feet": feet, "roi": roi}, notes, p.weighting,
+                          roi_area_mm2, min_size_mm, bounds)

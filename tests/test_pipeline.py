@@ -72,3 +72,35 @@ def test_percentiles():
     assert p["D50"] == pytest.approx(50.5, abs=0.6)
     vol = size_distribution(x, "volume")
     assert vol["D50"] > p["D50"]                  # big grains dominate the volume
+
+
+def test_cumulative_passing_curve():
+    from grain_analyzer.stats import cumulative_passing
+    s, pas = cumulative_passing(np.array([30.0, 10.0, 20.0]), "number")
+    np.testing.assert_allclose(s, [10, 20, 30])
+    np.testing.assert_allclose(pas, [100 / 3, 200 / 3, 100])
+    _, pv = cumulative_passing(np.array([10.0, 20.0]), "volume")
+    assert pv[0] == pytest.approx(100 * 1000 / 9000)           # 1000 / (1000 + 8000)
+
+
+def test_passing_bounds_bracket_unmeasured_fines():
+    from grain_analyzer.stats import passing_bounds
+    sizes = np.array([200.0, 300.0, 400.0, 500.0])
+    areas = np.array([10.0, 20.0, 30.0, 40.0])                 # measured = 100 of roi 400
+    b = passing_bounds(sizes, areas, roi_area_mm2=400.0, min_size_mm=150.0)
+    assert b["unmeasured_fraction"] == pytest.approx(0.75)
+    assert (b["upper"] >= b["lower"]).all() and b["lower"][-1] == pytest.approx(100)
+    assert b["upper"][-1] == pytest.approx(100) and b["upper"][0] == pytest.approx(75)
+    assert np.isnan(b["D_upper"]["D10"]) and np.isnan(b["D_upper"]["D50"])   # below the limit
+    assert 400 <= b["D_upper"]["D90"] <= 500                    # 90 % is reached among the rocks
+    assert b["D_lower"]["D10"] < b["D_lower"]["D50"] < b["D_lower"]["D90"]
+
+
+def test_psd_plot_renders():
+    from grain_analyzer.pipeline import Params, analyze
+    from grain_analyzer.viz import plot_psd
+    img, masks = make_scene()
+    res = analyze(img, Params(marker_size_mm=MARKER_MM, use_depth=False, min_area_px=50),
+                  FakeSegmenter(masks))
+    fig = plot_psd(res, "ECD")
+    assert fig.axes[0].get_ylim() == (0, 100)

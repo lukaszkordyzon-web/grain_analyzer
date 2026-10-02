@@ -5,10 +5,11 @@ import cv2
 import matplotlib
 
 matplotlib.use("Agg")
+import matplotlib.ticker  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
-from .stats import histogram  # noqa: E402
+from .stats import cumulative_passing, histogram, passing_curve_percentiles  # noqa: E402
 
 
 def draw_overlay(result, show_ids: bool = False, thickness: int = 1) -> np.ndarray:
@@ -49,5 +50,68 @@ def plot_histogram(sizes: np.ndarray, percentiles: dict[str, float], label: str,
     ax.set_ylabel("Liczba ziaren" if weighting == "number" else "Udział objętościowy [%]")
     ax.legend(frameon=False)
     ax.spines[["top", "right"]].set_visible(False)
+    fig.tight_layout()
+    return fig
+
+
+# Mid-tone ink / series colours that stay legible on both light and dark app themes.
+_INK, _SERIES, _MUTED = "#7f8591", "#3987e5", "#a9aeb8"
+_WEIGHT_LABEL = {"number": "liczby ziaren", "area": "powierzchni", "volume": "objętości"}
+
+
+def plot_psd(result, label: str, log_x: bool = True):
+    """Cumulative passing curve (particle size distribution) with D10/D50/D90.
+
+    When ``result.bounds`` exists (drone mode, area weighting) the unmeasured part of the
+    surface is bracketed: solid = measured rocks only, dashed = unmeasured counted as fines.
+    """
+    b = result.bounds
+    if b is not None:
+        xs, low = b["sizes"], b["lower"]
+        d_low = b["D_lower"]
+    else:
+        xs, low = cumulative_passing(result.sizes, result.weighting)
+        d_low = passing_curve_percentiles(xs, low)
+
+    fig, ax = plt.subplots(figsize=(7.5, 4.4))
+    fig.patch.set_alpha(0)
+    ax.patch.set_alpha(0)
+    ax.plot(xs, low, color=_SERIES, lw=2,
+            label="Zmierzone kamienie" + (" (bez niezmierzonej drobnicy)" if b is not None else ""))
+    if b is not None:
+        ax.plot(xs, b["upper"], color=_SERIES, lw=2, ls=(0, (4, 3)),
+                label="Górna granica: niezmierzony obszar = drobnica")
+        ax.fill_between(xs, low, b["upper"], color=_SERIES, alpha=0.10, lw=0)
+    if result.min_size_mm:
+        ax.axvline(result.min_size_mm, color=_MUTED, lw=1, ls=":")
+        ax.text(result.min_size_mm, 101.5, " próg pomiaru", color=_INK, fontsize=8, va="bottom")
+
+    for (name, val), p in zip(d_low.items(), (10, 50, 90)):
+        ax.axhline(p, color=_MUTED, lw=0.6, alpha=0.6)
+        if np.isfinite(val):
+            ax.plot([val], [p], "o", ms=6, color=_SERIES, mec="none")
+            ax.annotate(f"{name} = {val:.0f} mm", (val, p), xytext=(6, -12),
+                        textcoords="offset points", color=_INK, fontsize=9)
+    if log_x:
+        ax.set_xscale("log")
+        ax.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g}"))
+        ax.xaxis.set_minor_formatter(matplotlib.ticker.FuncFormatter(
+            lambda v, _: f"{v:g}" if f"{v:.0e}"[0] in "25" else ""))   # label 2x and 5x ticks
+    ax.set_ylim(0, 100)
+    ax.set_yticks(range(0, 101, 10))
+    ax.set_xlabel(f"{label} [mm]", color=_INK)
+    ax.set_ylabel(f"Skumulowany udział {_WEIGHT_LABEL[result.weighting]} poniżej rozmiaru [%]",
+                  color=_INK, fontsize=9)
+    ax.tick_params(colors=_INK, labelsize=9)
+    ax.grid(True, which="major", color=_MUTED, alpha=0.25, lw=0.6)
+    if log_x:
+        ax.grid(True, which="minor", axis="x", color=_MUTED, alpha=0.12, lw=0.5)
+    ax.spines[["top", "right"]].set_visible(False)
+    for sp in ax.spines.values():
+        sp.set_color(_MUTED)
+    if b is not None:
+        leg = ax.legend(loc="lower right", frameon=False, fontsize=8)
+        for t in leg.get_texts():
+            t.set_color(_INK)
     fig.tight_layout()
     return fig

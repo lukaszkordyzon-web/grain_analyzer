@@ -16,7 +16,8 @@ from grain_analyzer.measure import SIZE_METRICS  # noqa: E402
 from grain_analyzer.pipeline import DroneParams, Params, analyze, analyze_drone  # noqa: E402
 from grain_analyzer.scale import ARUCO_DICTS  # noqa: E402
 from grain_analyzer.segmentation import SAM_MODELS, SamSegmenter  # noqa: E402
-from grain_analyzer.viz import depth_preview, draw_overlay, plot_histogram  # noqa: E402
+from grain_analyzer.stats import WEIGHTINGS  # noqa: E402
+from grain_analyzer.viz import depth_preview, draw_overlay, plot_histogram, plot_psd  # noqa: E402
 
 st.set_page_config(page_title="Analiza ziaren", layout="wide")
 st.title("Analiza wielkości ziaren")
@@ -35,6 +36,10 @@ def get_depth(model_id: str) -> DepthEstimator:
     return DepthEstimator(model_id)
 
 
+def _fmt(v, floor):
+    return f"< {floor:.0f}" if not np.isfinite(v) else f"{v:.0f}"
+
+
 def results_view(res, label, wt, bins):
     if res.grains.empty:
         st.warning("Nie wykryto ziaren — zmniejsz minimalny rozmiar lub zmień ustawienia.")
@@ -42,14 +47,28 @@ def results_view(res, label, wt, bins):
     c = st.columns(5)
     c[0].metric("Ziarna", len(res.grains))
     for col, (k, v) in zip(c[1:4], res.percentiles.items()):
-        col.metric(k, f"{v:.1f} mm")
+        col.metric(k + (" (zmierzone)" if res.bounds else ""), f"{v:.1f} mm")
     c[4].metric("Skala (mediana)", f"{res.scale.mm_per_px:.3f} mm/px", res.scale.method,
                 delta_color="off")
     if res.n_rejected_depth:
         st.caption(f"Odrzucono wg głębi: {res.n_rejected_depth}")
     for n in res.notes:
         st.warning(n)
-    t1, t2, t3 = st.tabs(["Kontury", "Histogram", "Dane"])
+    if res.bounds:
+        u = res.bounds["unmeasured_fraction"]
+        st.info(
+            f"**{u:.0%} powierzchni obszaru to materiał poniżej progu pomiaru "
+            f"(< {res.min_size_mm:.0f} mm), szczeliny, cień lub niewykryte kamienie.** "
+            "Wartości D powyżej dotyczą tylko zmierzonych kamieni. Prawdziwe D leży między "
+            "granicą dolną (niezmierzone pominięte) a górną (całe niezmierzone to drobnica):")
+        import pandas as pd
+        d_lo, d_up = res.bounds["D_lower"], res.bounds["D_upper"]
+        st.dataframe(pd.DataFrame({
+            "D": list(d_lo), "dolna granica [mm]": [f"{v:.0f}" for v in d_lo.values()],
+            "górna granica [mm]": [_fmt(d_up[k], res.min_size_mm) for k in d_lo]}
+        ).set_index("D"), width="content")
+
+    t1, t2, t3 = st.tabs(["Kontury", "Krzywa uziarnienia", "Dane"])
     with t1:
         ids = st.checkbox("Numery ziaren")
         st.image(draw_overlay(res, ids), width="stretch")
@@ -57,7 +76,10 @@ def results_view(res, label, wt, bins):
             with st.expander("Mapa głębi (względna)"):
                 st.image(depth_preview(res.depth), width="stretch")
     with t2:
-        st.pyplot(plot_histogram(res.sizes, res.percentiles, label, wt, bins))
+        log_x = st.checkbox("Skala logarytmiczna osi X", True)
+        st.pyplot(plot_psd(res, label, log_x))
+        with st.expander("Histogram częstości (pomocniczy)"):
+            st.pyplot(plot_histogram(res.sizes, res.percentiles, label, wt, bins))
     with t3:
         st.dataframe(res.grains.round(3), width="stretch")
         d1, d2 = st.columns(2)
@@ -106,9 +128,9 @@ if mode == MODE_CLOSE:
 
         st.header("Statystyki")
         metric = st.selectbox("Miara wielkości", list(SIZE_METRICS), format_func=SIZE_METRICS.get)
-        weighting = st.radio("Ważenie D10/D50/D90", ["number", "volume"], horizontal=True,
-                             format_func={"number": "liczbowe", "volume": "objętościowe (d³)"}.get)
-        bins = st.slider("Liczba przedziałów histogramu", 5, 60, 20)
+        weighting = st.radio("Ważenie krzywej i D10/D50/D90", list(WEIGHTINGS), index=0,
+                             format_func=WEIGHTINGS.get)
+        bins = st.slider("Liczba przedziałów histogramu pomocniczego", 5, 60, 20)
 
     st.image(image, caption=f"{W}×{H} px", width=400)
     if st.button("Analizuj", type="primary"):
@@ -160,9 +182,11 @@ else:
 
         st.header("Statystyki")
         metric = st.selectbox("Miara wielkości", list(SIZE_METRICS), format_func=SIZE_METRICS.get)
-        weighting = st.radio("Ważenie D10/D50/D90", ["number", "volume"], index=1, horizontal=True,
-                             format_func={"number": "liczbowe", "volume": "objętościowe (d³)"}.get)
-        bins = st.slider("Liczba przedziałów histogramu", 5, 60, 20)
+        weighting = st.radio("Ważenie krzywej i D10/D50/D90", list(WEIGHTINGS), index=1,
+                             format_func=WEIGHTINGS.get,
+                             help="Dla zdjęć z góry standardem jest udział powierzchni. "
+                                  "Granice dla niezmierzonej drobnicy są liczone tylko dla tego ważenia.")
+        bins = st.slider("Liczba przedziałów histogramu pomocniczego", 5, 60, 20)
 
     # ---- click-to-mark -------------------------------------------------------------
     up_id = (upload.name, upload.size)
