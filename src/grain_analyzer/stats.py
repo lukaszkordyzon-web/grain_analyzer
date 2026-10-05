@@ -78,6 +78,63 @@ def passing_bounds(sizes_mm, areas_mm2, roi_area_mm2: float, min_size_mm: float)
             "D_upper": passing_curve_percentiles(xs, upper)}
 
 
+# --------------------------------------------------------------------------- fines
+_NICE_EDGES_MM = (50, 100, 150, 200, 300, 500, 750, 1000, 1500, 2000, 3000)
+
+
+def fraction_table(sizes_mm, areas_mm2, roi_area_mm2: float, min_size_mm: float,
+                   max_edges: int = 4) -> list[dict]:
+    """Share of the analysed surface by size class (area basis). Everything below the
+    measurement limit - fines, voids, shadow, missed rocks - is one explicit row."""
+    s = np.asarray(sizes_mm, float)
+    a = np.asarray(areas_mm2, float)
+    edges = [e for e in _NICE_EDGES_MM if min_size_mm * 1.15 < e < s.max()][:max_edges]
+    bounds = [min_size_mm] + edges + [np.inf]
+    rows = [{"label": f"< {min_size_mm:.0f} mm — niezmierzone (drobnica, szczeliny, cień)",
+             "fraction": max(0.0, 1.0 - a.sum() / roi_area_mm2)}]
+    for lo, hi in zip(bounds[:-1], bounds[1:]):
+        sel = (s >= lo) & (s < hi)
+        rows.append({"label": (f"{lo:.0f}–{hi:.0f} mm" if np.isfinite(hi) else f"≥ {lo:.0f} mm"),
+                     "fraction": float(a[sel].sum() / roi_area_mm2)})
+    return rows
+
+
+def rosin_rammler_fit(sizes, passing_pct, p_lo: float = 2.0, p_hi: float = 98.0) -> dict | None:
+    """Fit P(d) = 1 - exp(-(d/xc)^n) by linear regression of ln(-ln(1-P)) on ln d.
+    Returns None when the data do not support a sensible fit."""
+    d = np.asarray(sizes, float)
+    P = np.asarray(passing_pct, float) / 100
+    ok = (d > 0) & (P > p_lo / 100) & (P < p_hi / 100)
+    if ok.sum() < 8 or np.ptp(np.log(d[ok])) < 0.2:
+        return None
+    x, y = np.log(d[ok]), np.log(-np.log(1 - P[ok]))
+    n, b = np.polyfit(x, y, 1)
+    if n < 0.2:
+        return None
+    r2 = 1 - np.sum((y - (n * x + b)) ** 2) / max(np.sum((y - y.mean()) ** 2), 1e-12)
+    return {"xc": float(np.exp(-b / n)), "n": float(n), "r2": float(r2), "n_points": int(ok.sum())}
+
+
+def rr_passing(fit: dict, d) -> np.ndarray:
+    return 100 * (1 - np.exp(-(np.asarray(d, float) / fit["xc"]) ** fit["n"]))
+
+
+def rr_percentile(fit: dict, p: float) -> float:
+    return float(fit["xc"] * (-np.log(1 - p / 100)) ** (1 / fit["n"]))
+
+
+def estimate_fines(bounds: dict, min_r2: float = 0.9) -> dict | None:
+    """Whole-surface estimate: Rosin-Rammler fitted to the *upper* passing curve (unmeasured
+    area counted as fines) and extrapolated below the measurement limit. An estimate, not
+    a measurement - it assumes voids/shadow are a minor part of the unmeasured area and
+    that the size distribution is Rosin-Rammler shaped."""
+    fit = rosin_rammler_fit(bounds["sizes"], bounds["upper"])
+    if fit is None or fit["r2"] < min_r2:
+        return None
+    d = {f"D{p}": rr_percentile(fit, p) for p in (10, 50, 90)}
+    return {"fit": fit, "D": d}
+
+
 def histogram(sizes: np.ndarray, bins: int = 20, weighting: str = "number"):
     """(counts-or-weight share %, bin edges)."""
     sizes = np.asarray(sizes, float)

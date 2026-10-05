@@ -9,7 +9,8 @@ import matplotlib.ticker  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
-from .stats import cumulative_passing, histogram, passing_curve_percentiles  # noqa: E402
+from .stats import (cumulative_passing, histogram, passing_curve_percentiles,  # noqa: E402
+                    rr_passing, rr_percentile)
 
 
 def draw_overlay(result, show_ids: bool = False, thickness: int = 1) -> np.ndarray:
@@ -55,17 +56,20 @@ def plot_histogram(sizes: np.ndarray, percentiles: dict[str, float], label: str,
 
 
 # Mid-tone ink / series colours that stay legible on both light and dark app themes.
-_INK, _SERIES, _MUTED = "#7f8591", "#3987e5", "#a9aeb8"
+_INK, _SERIES, _MUTED, _EST = "#7f8591", "#3987e5", "#a9aeb8", "#e8743b"
 _WEIGHT_LABEL = {"number": "liczby ziaren", "area": "powierzchni", "volume": "objętości"}
 
 
 def plot_psd(result, label: str, log_x: bool = True):
     """Cumulative passing curve (particle size distribution) with D10/D50/D90.
 
-    When ``result.bounds`` exists (drone mode, area weighting) the unmeasured part of the
-    surface is bracketed: solid = measured rocks only, dashed = unmeasured counted as fines.
+    Drone mode (area weighting) adds the unmeasured part of the surface:
+      blue solid  - measured rocks only,
+      blue dashed - unmeasured area counted as fines (upper bound), band = uncertainty,
+      orange      - Rosin-Rammler estimate of the whole surface, extrapolated below the
+                    measurement limit (an estimate, not a measurement).
     """
-    b = result.bounds
+    b, est = result.bounds, result.estimate
     if b is not None:
         xs, low = b["sizes"], b["lower"]
         d_low = b["D_lower"]
@@ -79,17 +83,28 @@ def plot_psd(result, label: str, log_x: bool = True):
     ax.plot(xs, low, color=_SERIES, lw=2,
             label="Zmierzone kamienie" + (" (bez niezmierzonej drobnicy)" if b is not None else ""))
     if b is not None:
-        ax.plot(xs, b["upper"], color=_SERIES, lw=2, ls=(0, (4, 3)),
+        ax.plot(xs, b["upper"], color=_SERIES, lw=1.6, ls=(0, (4, 3)),
                 label="Górna granica: niezmierzony obszar = drobnica")
         ax.fill_between(xs, low, b["upper"], color=_SERIES, alpha=0.10, lw=0)
+    d_marks = d_low
+    x_left = xs.min()
+    if est is not None:
+        fit = est["fit"]
+        x_left = max(result.min_size_mm / 50, float(rr_percentile(fit, 1.5)))
+        grid = np.geomspace(min(x_left, xs.min()), xs.max(), 200)
+        ax.plot(grid, rr_passing(fit, grid), color=_EST, lw=2,
+                label="Szacunek całej hałdy (ekstrapolacja Rosina–Rammlera)")
+        ax.axvspan(grid.min(), result.min_size_mm, color=_MUTED, alpha=0.08, lw=0)
+        d_marks = est["D"]
     if result.min_size_mm:
         ax.axvline(result.min_size_mm, color=_MUTED, lw=1, ls=":")
         ax.text(result.min_size_mm, 101.5, " próg pomiaru", color=_INK, fontsize=8, va="bottom")
 
-    for (name, val), p in zip(d_low.items(), (10, 50, 90)):
+    mark_color = _EST if est is not None else _SERIES
+    for (name, val), p in zip(d_marks.items(), (10, 50, 90)):
         ax.axhline(p, color=_MUTED, lw=0.6, alpha=0.6)
         if np.isfinite(val):
-            ax.plot([val], [p], "o", ms=6, color=_SERIES, mec="none")
+            ax.plot([val], [p], "o", ms=6, color=mark_color, mec="none")
             ax.annotate(f"{name} = {val:.0f} mm", (val, p), xytext=(6, -12),
                         textcoords="offset points", color=_INK, fontsize=9)
     if log_x:
@@ -97,6 +112,7 @@ def plot_psd(result, label: str, log_x: bool = True):
         ax.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g}"))
         ax.xaxis.set_minor_formatter(matplotlib.ticker.FuncFormatter(
             lambda v, _: f"{v:g}" if f"{v:.0e}"[0] in "25" else ""))   # label 2x and 5x ticks
+    ax.set_xlim(left=min(x_left, xs.min()) * 0.95)
     ax.set_ylim(0, 100)
     ax.set_yticks(range(0, 101, 10))
     ax.set_xlabel(f"{label} [mm]", color=_INK)

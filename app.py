@@ -13,7 +13,8 @@ from grain_analyzer.camera import DEFAULT_FOCAL_35MM, read_camera_meta  # noqa: 
 from grain_analyzer.depth import DEPTH_MODELS, DepthEstimator  # noqa: E402
 from grain_analyzer.export import grains_csv, summary_csv  # noqa: E402
 from grain_analyzer.measure import SIZE_METRICS  # noqa: E402
-from grain_analyzer.pipeline import DroneParams, Params, analyze, analyze_drone, plan_drone  # noqa: E402
+from grain_analyzer.pipeline import (REFERENCES, DroneParams, Params, analyze,  # noqa: E402
+                                     analyze_drone, plan_drone)
 from grain_analyzer.scale import ARUCO_DICTS  # noqa: E402
 from grain_analyzer.segmentation import SAM_MODELS, SamSegmenter  # noqa: E402
 from grain_analyzer.stats import WEIGHTINGS  # noqa: E402
@@ -23,7 +24,7 @@ st.set_page_config(page_title="Analiza ziaren", layout="wide")
 st.title("Analiza wielkości ziaren")
 
 MODE_CLOSE = "Zbliżenie ze znacznikiem ArUco"
-MODE_DRONE = "Dron — człowiek w kadrze jako skala"
+MODE_DRONE = "Dron — zdjęcie całej hałdy"
 
 
 @st.cache_resource(show_spinner="Ładowanie modelu SAM…")
@@ -44,35 +45,52 @@ def results_view(res, label, wt, bins):
     if res.grains.empty:
         st.warning("Nie wykryto ziaren — zmniejsz minimalny rozmiar lub zmień ustawienia.")
         return
+    est = res.estimate
+    heads = est["D"] if est else res.percentiles
     c = st.columns(5)
-    c[0].metric("Ziarna", len(res.grains))
-    for col, (k, v) in zip(c[1:4], res.percentiles.items()):
-        col.metric(k + (" (zmierzone)" if res.bounds else ""), f"{v:.1f} mm")
+    c[0].metric("Zmierzone kamienie", len(res.grains))
+    for col, (k, v) in zip(c[1:4], heads.items()):
+        col.metric(k + (" (szacunek)" if est else ""), f"{v:.1f} mm")
     c[4].metric("Skala (mediana)", f"{res.scale.mm_per_px:.3f} mm/px", res.scale.method,
                 delta_color="off")
+    if est:
+        st.caption("D10/D50/D90 to **szacunek dla całej powierzchni hałdy**, w tym drobnicy, "
+                   "której nie widać na zdjęciu (ekstrapolacja rozkładu Rosina–Rammlera z "
+                   f"kamieni większych niż {res.min_size_mm:.0f} mm; dopasowanie R² = "
+                   f"{est['fit']['r2']:.2f}). Szczegóły i granice niepewności poniżej.")
     if res.n_rejected_depth:
         st.caption(f"Odrzucono wg głębi: {res.n_rejected_depth}")
     for n in res.notes:
         st.warning(n)
-    if res.bounds:
-        u = res.bounds["unmeasured_fraction"]
-        st.info(
-            f"**{u:.0%} powierzchni obszaru to materiał poniżej progu pomiaru "
-            f"(< {res.min_size_mm:.0f} mm), szczeliny, cień lub niewykryte kamienie.** "
-            "Wartości D powyżej dotyczą tylko zmierzonych kamieni. Prawdziwe D leży między "
-            "granicą dolną (niezmierzone pominięte) a górną (całe niezmierzone to drobnica):")
+    if res.fractions:
         import pandas as pd
-        d_lo, d_up = res.bounds["D_lower"], res.bounds["D_upper"]
-        st.dataframe(pd.DataFrame({
-            "D": list(d_lo), "dolna granica [mm]": [f"{v:.0f}" for v in d_lo.values()],
-            "górna granica [mm]": [_fmt(d_up[k], res.min_size_mm) for k in d_lo]}
-        ).set_index("D"), width="content")
+        st.markdown("**Skład powierzchni według frakcji** (udział analizowanego obszaru)")
+        st.dataframe(pd.DataFrame({"Frakcja": [r["label"] for r in res.fractions],
+                                   "Udział powierzchni": [f"{r['fraction']:.0%}" for r in res.fractions]}
+                                  ).set_index("Frakcja"), width="content")
+    if res.bounds:
+        import pandas as pd
+        with st.expander("Szczegóły: zmierzone kamienie i granice niepewności", expanded=not est):
+            u = res.bounds["unmeasured_fraction"]
+            st.markdown(
+                f"**{u:.0%} powierzchni to materiał poniżej progu pomiaru (< {res.min_size_mm:.0f} mm), "
+                "szczeliny, cień lub niewykryte kamienie.** Prawdziwe D leży między granicą dolną "
+                "(niezmierzone pominięte — tylko zmierzone kamienie) a górną (całe niezmierzone "
+                "to drobnica)." + (" Szacunek wykorzystuje górną granicę jako punkt odniesienia."
+                                   if est else " Dopasowanie rozkładu nie było wiarygodne, więc "
+                                   "szacunku dla drobnicy nie podaję."))
+            d_lo, d_up = res.bounds["D_lower"], res.bounds["D_upper"]
+            table = {"D": list(d_lo), "dolna granica [mm]": [f"{v:.0f}" for v in d_lo.values()],
+                     "górna granica [mm]": [_fmt(d_up[k], res.min_size_mm) for k in d_lo]}
+            if est:
+                table["szacunek [mm]"] = [f"{est['D'][k]:.0f}" for k in d_lo]
+            st.dataframe(pd.DataFrame(table).set_index("D"), width="content")
 
     t1, t2, t3 = st.tabs(["Kontury", "Krzywa uziarnienia", "Dane"])
     with t1:
         ids = st.checkbox("Numery ziaren")
         st.image(draw_overlay(res, ids), width="stretch")
-        if res.depth is not None and not res.scale.method.startswith("człowiek"):
+        if res.depth is not None and not res.annotations:
             with st.expander("Mapa głębi (względna)"):
                 st.image(depth_preview(res.depth), width="stretch")
     with t2:
@@ -158,8 +176,24 @@ else:
 
     meta = read_camera_meta(raw)
     with st.sidebar:
-        st.header("Kamera i człowiek")
-        person_h = st.number_input("Wzrost człowieka w kadrze [m]", 1.2, 2.2, 1.75, 0.05)
+        st.header("Skala zdjęcia")
+        ref = st.radio("Skąd wziąć skalę?", list(REFERENCES), format_func=REFERENCES.get,
+                       help="Zaznaczasz na zdjęciu coś o znanym rozmiarze. Człowiek i ściana "
+                            "wymagają kliknięcia dwóch punktów; znacznik jest wykrywany sam.")
+        person_h, wall_h, wall_slope, marker_mm, marker_dict = 1.75, 10.0, 90.0, 200.0, "4x4_50"
+        if ref == "person":
+            person_h = st.number_input("Wzrost człowieka w kadrze [m]", 1.2, 2.2, 1.75, 0.05)
+        elif ref == "wall":
+            wall_h = st.number_input("Wysokość ściany [m]", 1.0, 100.0, 10.0, 0.5)
+            wall_slope = {"Pionowa": 90.0, "Lekko pochylona (ok. 80°)": 80.0,
+                          "Mocno pochylona (ok. 70°)": 70.0}[
+                st.selectbox("Nachylenie ściany", ["Pionowa", "Lekko pochylona (ok. 80°)",
+                                                   "Mocno pochylona (ok. 70°)"],
+                             help="Ściana pochylona od kamery daje inną skalę niż pionowa.")]
+        else:
+            marker_mm = st.number_input("Bok znacznika ArUco [mm]", 20.0, 5000.0, 200.0)
+            marker_dict = st.selectbox("Słownik ArUco", list(ARUCO_DICTS))
+        st.header("Kamera")
         pitch0 = abs(meta.gimbal_pitch_deg) if meta.gimbal_pitch_deg is not None else 45.0
         pitch = st.number_input(
             "Kąt kamery w dół [°] (90 = prosto w dół)", 5.0, 90.0, float(pitch0), 1.0,
@@ -187,20 +221,34 @@ else:
         weighting = st.radio("Ważenie krzywej i D10/D50/D90", list(WEIGHTINGS), index=1,
                              format_func=WEIGHTINGS.get,
                              help="Dla zdjęć z góry standardem jest udział powierzchni. "
-                                  "Granice dla niezmierzonej drobnicy są liczone tylko dla tego ważenia.")
+                                  "Drobnica (frakcje, szacunek, granice) jest liczona tylko dla tego ważenia.")
         bins = st.slider("Liczba przedziałów histogramu pomocniczego", 5, 60, 20)
 
     # ---- click-to-mark -------------------------------------------------------------
     up_id = (upload.name, upload.size)
     if st.session_state.get("up_id") != up_id:
-        st.session_state.update(up_id=up_id, pts={}, last_click=None, step=0)
+        st.session_state.update(up_id=up_id, pts={}, last_click=None, _next_step=0)
         st.session_state.pop("result", None)
     pts = st.session_state.pts
-    STEPS = [("head", "1. Czubek głowy człowieka"), ("feet", "2. Stopy człowieka"),
-             ("roi0", "3. Obszar hałdy: lewy górny róg"), ("roi1", "4. Obszar hałdy: prawy dolny róg")]
+    ROI_STEPS = [("roi0", "Obszar hałdy: lewy górny róg"), ("roi1", "Obszar hałdy: prawy dolny róg")]
+    STEPS = {
+        "person": [("head", "Czubek głowy człowieka"), ("feet", "Stopy człowieka")] + ROI_STEPS,
+        "wall": [("head", "Górna krawędź ściany"),
+                 ("feet", "Dolna krawędź ściany (pod górną, w tym samym pionie)")] + ROI_STEPS,
+        "marker": ROI_STEPS,
+    }[ref]
+    STEPS = [(k, f"{i + 1}. {lab}") for i, (k, lab) in enumerate(STEPS)]
+    if st.session_state.get("ref_prev") != ref:          # other reference -> its own points
+        st.session_state.ref_prev = ref
+        pts.pop("head", None)
+        pts.pop("feet", None)
+        st.session_state._next_step = 0
+    if "_next_step" in st.session_state:                  # auto-advance after a click
+        st.session_state.step_radio = min(st.session_state.pop("_next_step"), len(STEPS) - 1)
+    if st.session_state.get("step_radio", 0) >= len(STEPS):
+        st.session_state.step_radio = 0
     step = st.radio("Co teraz klikasz na zdjęciu?", range(len(STEPS)), horizontal=True,
-                    format_func=lambda i: STEPS[i][1], index=st.session_state.step, key="step_radio")
-    st.session_state.step = step
+                    format_func=lambda i: STEPS[i][1], key="step_radio")
 
     DW = min(1000, W)
     sc = DW / W
@@ -221,12 +269,17 @@ else:
         st.session_state.last_click = (click["x"], click["y"])
         pts[STEPS[step][0]] = (click["x"] / sc, click["y"] / sc)
         if step < len(STEPS) - 1:
-            st.session_state.step = step + 1
+            st.session_state._next_step = step + 1
         st.rerun()
-    st.caption("Człowiek jest tylko liniką skali: kliknij dokładnie czubek głowy i stopy. "
-               "Obszar hałdy zawęża analizę do kamieni (bez ścian, kałuż i podłoża).")
+    st.caption({
+        "person": "Człowiek jest tylko linijką skali: kliknij dokładnie czubek głowy i stopy. ",
+        "wall": "Kliknij górną i dolną krawędź ściany jedną pionową linią; dół musi leżeć na "
+                "tym samym terenie co hałda. ",
+        "marker": "Znacznik zostanie znaleziony automatycznie. ",
+    }[ref] + "Obszar hałdy zawęża analizę do kamieni (bez ścian, kałuż i podłoża).")
 
-    ready = all(k in pts for k in ("head", "feet", "roi0", "roi1"))
+    needed = [k for k, _ in STEPS]
+    ready = all(k in pts for k in needed)
     if "roi0" in pts and "roi1" in pts:
         _roi = (min(pts["roi0"][0], pts["roi1"][0]), min(pts["roi0"][1], pts["roi1"][1]),
                 max(pts["roi0"][0], pts["roi1"][0]), max(pts["roi0"][1], pts["roi1"][1]))
@@ -242,14 +295,16 @@ else:
         gc.collect()
         x0, x1 = sorted((pts["roi0"][0], pts["roi1"][0]))
         y0, y1 = sorted((pts["roi0"][1], pts["roi1"][1]))
-        p = DroneParams(max_side=max_side, person_height_m=person_h, pitch_deg=pitch,
-                        focal_35mm=focal, tile=tile, min_diameter_px=min_d, max_area_frac=max_frac,
+        p = DroneParams(max_side=max_side, reference=ref, person_height_m=person_h,
+                        wall_height_m=wall_h, wall_slope_deg=wall_slope, marker_size_mm=marker_mm,
+                        marker_dict=marker_dict, pitch_deg=pitch, focal_35mm=focal, tile=tile, min_diameter_px=min_d, max_area_frac=max_frac,
                         size_metric=metric, weighting=weighting)
         bar = st.progress(0.0, "Start…")
         try:
             st.session_state.result = analyze_drone(
                 image, p, get_segmenter(SAM_MODELS[sam_name]),
-                pts["head"], pts["feet"], (x0, y0, x1, y1), progress=lambda f, t: bar.progress(f, t))
+                pts.get("head"), pts.get("feet"), (x0, y0, x1, y1),
+                progress=lambda f, t: bar.progress(f, t))
             st.session_state.meta = (SIZE_METRICS[metric], weighting, bins)
         except ValueError as e:
             st.error(str(e))

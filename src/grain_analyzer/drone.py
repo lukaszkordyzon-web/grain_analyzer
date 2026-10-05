@@ -1,14 +1,14 @@
-"""Oblique drone photos: no marker, a person of known height is the scale reference.
+"""Oblique drone photos. Scale from geometry (pinhole camera, zero roll).
 
-Scale model (pinhole camera, zero roll):
-  1. The camera depression angle (gimbal pitch) and focal length (px) are known.
-  2. The person's feet and head are clicked. A person of height ``h`` standing on the
-     ground spans a number of image pixels that depends on the distance Z of the person
-     and on the viewing angle -> solve for Z (``solve_person_distance``).
-  3. mm/px at the person = Z / f.
-  4. Everywhere else the scale is proportional to the metric depth map:
-     mm/px(u, v) = mm/px(person) * Z(u, v) / Z(person)   (only depth *ratios* are used,
-     so a global bias of the depth model cancels out).
+Camera pitch and focal length (px) are known. The ground is a horizontal plane; the only
+unknown is D, the camera height above it. One of three references fixes D:
+  * a PERSON of known height (feet + head clicked),
+  * a WALL of known height (bottom + top edge clicked; optionally leaning),
+  * an ArUco MARKER of known size lying on the ground (automatic).
+A vertical segment of height ``h`` whose foot is at pixel ``feet`` spans a number of pixels
+that depends on its distance Z -> solve for Z, then D = g . P_feet. With D known, every
+image row has a depth Z = D / (g . ray) and a scale Z / f (``scale_map_from_camera_height``).
+(Optional experimental mode: scale from the ratios of a metric depth map.)
 """
 from __future__ import annotations
 
@@ -30,13 +30,20 @@ def _down_vector(pitch_deg: float) -> np.ndarray:
     return np.array([0.0, math.cos(t), math.sin(t)])
 
 
+def _forward_horizontal(pitch_deg: float) -> np.ndarray:
+    """Horizontal direction pointing away from the camera, in camera coords."""
+    t = math.radians(pitch_deg)
+    return np.array([0.0, -math.sin(t), math.cos(t)])
+
+
 def person_span_px(z: float, feet: tuple[float, float], f: float, cx: float, cy: float,
-                   pitch_deg: float, height_m: float) -> float:
-    """Pixel distance feet->head predicted for a person standing ``z`` m (along the optical
-    axis) from the camera at pixel ``feet``."""
+                   pitch_deg: float, height_m: float, lean_m: float = 0.0) -> float:
+    """Pixel distance feet->head predicted for a vertical segment of ``height_m`` whose foot
+    is ``z`` m (along the optical axis) from the camera at pixel ``feet``. ``lean_m`` shifts
+    the top away from the camera (a wall leaning back)."""
     d = np.array([(feet[0] - cx) / f, (feet[1] - cy) / f, 1.0])
     p_feet = z * d
-    p_head = p_feet - height_m * _down_vector(pitch_deg)
+    p_head = p_feet - height_m * _down_vector(pitch_deg) + lean_m * _forward_horizontal(pitch_deg)
     if p_head[2] <= 1e-6:
         return float("inf")
     uh = f * p_head[0] / p_head[2] + cx
@@ -45,20 +52,21 @@ def person_span_px(z: float, feet: tuple[float, float], f: float, cx: float, cy:
 
 
 def solve_person_distance(head: tuple[float, float], feet: tuple[float, float], f: float,
-                          cx: float, cy: float, pitch_deg: float, height_m: float) -> float:
+                          cx: float, cy: float, pitch_deg: float, height_m: float,
+                          lean_m: float = 0.0) -> float:
     """Distance Z [m] at which a person of ``height_m`` appears as the clicked head/feet span."""
     observed = math.hypot(head[0] - feet[0], head[1] - feet[1])
     if observed < 3:
         raise ValueError("Głowa i stopy są zbyt blisko siebie — kliknij dokładniej.")
     # smallest distance for which the head is still in front of the camera
-    d_z, g_z = 1.0, _down_vector(pitch_deg)[2]
-    lo, hi = max(0.3, 1.001 * height_m * g_z / d_z), 5000.0
-    if person_span_px(lo, feet, f, cx, cy, pitch_deg, height_m) < observed:
+    t = math.radians(pitch_deg)
+    lo, hi = max(0.3, 1.001 * (height_m * math.sin(t) - lean_m * math.cos(t))), 5000.0
+    if person_span_px(lo, feet, f, cx, cy, pitch_deg, height_m, lean_m) < observed:
         raise ValueError("Człowiek wygląda na większego niż pozwala geometria — sprawdź kąt "
                          "gimbala, ogniskową i punkty głowy/stóp.")
     for _ in range(80):                              # span(z) decreases with z -> bisection
         mid = math.sqrt(lo * hi)
-        if person_span_px(mid, feet, f, cx, cy, pitch_deg, height_m) > observed:
+        if person_span_px(mid, feet, f, cx, cy, pitch_deg, height_m, lean_m) > observed:
             lo = mid
         else:
             hi = mid
@@ -85,14 +93,15 @@ class PersonCalibration:
 
 
 def calibrate_person(head, feet, depth_m: np.ndarray | None, f_px: float, pitch_deg: float,
-                     height_m: float = 1.75) -> PersonCalibration:
+                     height_m: float = 1.75, lean_m: float = 0.0) -> PersonCalibration:
     h, w = (depth_m.shape if depth_m is not None else (0, 0))
     cx, cy = (w / 2, h / 2) if depth_m is not None else (0.0, 0.0)
-    return _calibrate(head, feet, depth_m, f_px, pitch_deg, height_m, cx, cy)
+    return _calibrate(head, feet, depth_m, f_px, pitch_deg, height_m, cx, cy, lean_m)
 
 
-def _calibrate(head, feet, depth_m, f_px, pitch_deg, height_m, cx, cy) -> PersonCalibration:
-    z = solve_person_distance(head, feet, f_px, cx, cy, pitch_deg, height_m)
+def _calibrate(head, feet, depth_m, f_px, pitch_deg, height_m, cx, cy,
+               lean_m: float = 0.0) -> PersonCalibration:
+    z = solve_person_distance(head, feet, f_px, cx, cy, pitch_deg, height_m, lean_m)
     z_model = person_depth(depth_m, head, feet) if depth_m is not None else None
     return PersonCalibration(z, 1000 * z / f_px,
                              math.hypot(head[0] - feet[0], head[1] - feet[1]), z_model)
@@ -108,23 +117,51 @@ def person_depth(depth_m: np.ndarray, head, feet) -> float:
     return float(np.median(win))
 
 
+def camera_height(z_feet_m: float, feet, f_px: float, cy: float, pitch_deg: float) -> float:
+    """Camera height D above the horizontal plane through the point at pixel ``feet`` that is
+    ``z_feet_m`` away along the optical axis."""
+    t = math.radians(pitch_deg)
+    return z_feet_m * (math.cos(t) * (feet[1] - cy) / f_px + math.sin(t))
+
+
+def camera_height_from_marker(corners, side_m: float, f_px: float, cx: float, cy: float,
+                              pitch_deg: float) -> float:
+    """Camera height from a square marker of side ``side_m`` lying on the ground: intersect
+    the four corner rays with the plane (for D = 1) and compare the resulting side lengths."""
+    g = _down_vector(pitch_deg)
+    pts = []
+    for u, v in np.asarray(corners, float).reshape(4, 2):
+        d = np.array([(u - cx) / f_px, (v - cy) / f_px, 1.0])
+        gd = float(g @ d)
+        if gd <= 0.05:
+            raise ValueError("Znacznik jest zbyt blisko horyzontu — nie da się z niego policzyć skali.")
+        pts.append(d / gd)
+    side = float(np.mean([np.linalg.norm(pts[i] - pts[(i + 1) % 4]) for i in range(4)]))
+    return side_m / side
+
+
+def scale_map_from_camera_height(shape: tuple[int, int], f_px: float, pitch_deg: float,
+                                 d_m: float) -> np.ndarray:
+    """mm per pixel for every pixel from the camera height above a horizontal ground plane.
+    With zero roll the scale depends on the image row only. Rows at/above the horizon get
+    the farthest valid scale."""
+    h, w = shape
+    t = math.radians(pitch_deg)
+    y = (np.arange(h, dtype=np.float64) - h / 2) / f_px
+    g_d = math.cos(t) * y + math.sin(t)               # g . ray, per row
+    ok = g_d > 0.02
+    z = np.full(h, np.nan)
+    z[ok] = d_m / g_d[ok]
+    z[~ok] = np.nanmax(z) if ok.any() else d_m
+    return (1000 * z / f_px).astype(np.float32)[:, None] * np.ones((1, w), np.float32)
+
+
 def plane_scale_map(shape: tuple[int, int], f_px: float, pitch_deg: float, feet,
                     z_feet_m: float) -> np.ndarray:
-    """mm per pixel from geometry alone: the ground is a horizontal plane through the
-    person's feet; each pixel's ray hits it at depth Z (along the optical axis) and the
-    scale is Z / f. With zero roll the scale depends on the image row only.
-    Rows at/above the horizon (no ground intersection) get the farthest valid scale."""
-    h, w = shape
-    th = math.radians(pitch_deg)
-    c, s = math.cos(th), math.sin(th)
-    y = (np.arange(h, dtype=np.float64) - h / 2) / f_px
-    g_d = c * y + s                                   # g . ray, per row
-    plane = z_feet_m * (c * (feet[1] - h / 2) / f_px + s)   # g . P_feet
-    z = np.full(h, np.nan)
-    ok = g_d > 0.02
-    z[ok] = plane / g_d[ok]
-    z[~ok] = np.nanmax(z) if ok.any() else z_feet_m
-    return (1000 * z / f_px).astype(np.float32)[:, None] * np.ones((1, w), np.float32)
+    """Ground-plane scale anchored at a reference whose foot is at pixel ``feet``, ``z_feet_m``
+    away along the optical axis."""
+    return scale_map_from_camera_height(
+        shape, f_px, pitch_deg, camera_height(z_feet_m, feet, f_px, shape[0] / 2, pitch_deg))
 
 
 def scale_map(depth_m: np.ndarray, cal: PersonCalibration, head, feet) -> np.ndarray:
@@ -150,7 +187,7 @@ def tile_boxes(x0: int, y0: int, x1: int, y1: int, tile: int, overlap: float):
 
 def build_labels(image: np.ndarray, segmenter, roi, *, tile: int = 800, overlap: float = 0.2,
                  min_area_px: int = 100, max_area_px: int = 10**9, max_overlap: float = 0.4,
-                 progress=None):
+                 progress=None, exclude: np.ndarray | None = None):
     """Run the segmenter tile by tile and paint accepted masks into one label image.
 
     Memory stays flat: only one tile's masks exist at a time (a full-frame mask per rock
@@ -181,6 +218,8 @@ def build_labels(image: np.ndarray, segmenter, roi, *, tile: int = 800, overlap:
                 continue
             if (sub[mask] > 0).mean() > max_overlap:
                 continue
+            if exclude is not None and exclude[ya:yb, xa:xb][mask].mean() > 0.2:
+                continue                              # e.g. the reference marker itself
             free = mask & (sub == 0)
             if free.sum() < min_area_px:
                 continue

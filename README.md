@@ -18,19 +18,25 @@ pytest            # (pip install -r requirements-dev.txt) testy bez modeli (synt
 Modele pobierają się z Hugging Face przy pierwszym uruchomieniu (SAM ViT-B ≈ 375 MB).
 
 ## Tryb „Dron” (hałdy urobku, zdjęcia ukośne)
-Dla zdjęć z drona (np. DJI Matrice 3D/4D) bez znacznika: **w kadrze musi być człowiek** (znany wzrost,
-domyślnie 1,75 m) — to jedyna referencja skali.
-1. Wgraj **oryginał** zdjęcia (metadane DJI: kąt gimbala, ogniskowa). Bez nich wpisz je ręcznie.
-2. Kliknij na zdjęciu: czubek głowy, stopy, potem prostokąt obszaru hałdy (bez ścian, kałuż, podłoża).
-3. Z kąta kamery, ogniskowej i rozmiaru człowieka w pikselach liczona jest jego odległość → mm/px
-   w jego miejscu. Dalej skala wynika z geometrii: teren to płaszczyzna pozioma przez stopy człowieka,
-   a skala zmienia się z wierszem obrazu (bez modelu głębi — modele głębi trenowane na scenach
-   naziemnych mylą się na ujęciach z drona; w kodzie jest opcjonalny tryb eksperymentalny).
-4. SAM działa na nakładających się kafelkach, więc widzi drobniejsze kamienie.
+Cała hałda na jednym zdjęciu (np. DJI Matrice 3D/4D). Skala musi wynikać z czegoś o znanym
+rozmiarze w kadrze — do wyboru w panelu:
+- **człowiek** (domyślnie 1,75 m): klikasz czubek głowy i stopy,
+- **ściana o znanej wysokości**: klikasz górną i dolną krawędź (jedną pionową linią), podajesz wysokość
+  i nachylenie ściany (pochylona od kamery daje inną skalę niż pionowa),
+- **znacznik ArUco na ziemi**: wykrywany automatycznie.
 
-Uwagi: kamienie mniejsze niż „min. średnica [px]” nie są mierzone (D10 jest wtedy zawyżone — aplikacja
-podaje pokrycie obszaru). Im wyższa rozdzielczość zdjęcia, tym drobniejszą frakcję da się zmierzyć.
-Człowiek o wysokości < ~15 px daje mało dokładną kalibrację. Wynik jest orientacyjny (kilkanaście %).
+Wszystkie trzy sprowadzają się do wysokości kamery nad terenem; z niej, z kąta kamery i ogniskowej
+(metadane DJI w oryginalnym pliku, inaczej ręcznie) liczona jest skala dla każdego wiersza zdjęcia.
+Dalej: klikasz prostokąt hałdy; SAM działa na kafelkach; pomiar z lokalną skalą.
+
+**Drobnica** (kamienie mniejsze niż próg pomiaru) nie jest widoczna na zdjęciu, więc wynik ma 3 warstwy:
+1. *Skład powierzchni według frakcji* — zmierzone udziały klas + jawny wiersz „niezmierzone”.
+2. *Granice niepewności* — dolna (niezmierzone pominięte) i górna (całe niezmierzone = drobnica).
+3. *Szacunek dla całej hałdy* — dopasowanie rozkładu Rosina–Rammlera do górnej krzywej i ekstrapolacja
+   poniżej progu (oznaczone jako szacunek; podane R²; przy złym dopasowaniu aplikacja go nie podaje).
+
+Uwagi: skala zakłada, że hałda leży w płaszczyźnie terenu punktu odniesienia (wyższe partie wychodzą
+lekko zawyżone). Człowiek/znacznik < ~15 px daje mało dokładną kalibrację. Wynik jest orientacyjny.
 
 ## Jak zrobić zdjęcie (tryb ze znacznikiem)
 Wydrukuj znacznik ArUco (domyślnie słownik 4x4_50), zmierz **bok czarnego kwadratu** w mm i
