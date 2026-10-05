@@ -1,5 +1,6 @@
 # For running on your own machine. Install PyTorch FIRST from https://pytorch.org (pick your
-# CUDA version for an NVIDIA GPU), then:  pip install -r requirements-local.txt
+# CUDA version for an NVIDIA GPU; the install command must include BOTH torch and torchvision),
+# then:  pip install -r requirements-local.txt
 numpy>=1.24
 pandas>=2.0
 matplotlib>=3.7

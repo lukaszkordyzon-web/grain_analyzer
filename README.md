@@ -28,6 +28,8 @@ pip install -r requirements-local.txt
 export GRAIN_MAX_TILES=40                               # Windows PowerShell: $env:GRAIN_MAX_TILES=40
 streamlit run app.py
 ```
+Skrót: `run_local.bat` (Windows) lub `./run_local.sh` (Mac/Linux) — ustawiają limit i uruchamiają aplikację.
+Sprawdzenie GPU: `python -c "import torch; print(torch.cuda.is_available())"` (oraz podpis w panelu bocznym).
 W panelu bocznym aplikacja pokazuje, czy liczy na GPU czy na procesorze. `GRAIN_DEVICE=cpu|cuda|mps`
 wymusza urządzenie (MPS = Apple GPU, eksperymentalnie, nieprzetestowane).
 
