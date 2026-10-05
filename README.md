@@ -17,6 +17,20 @@ pytest            # (pip install -r requirements-dev.txt) testy bez modeli (synt
 ```
 Modele pobierają się z Hugging Face przy pierwszym uruchomieniu (SAM ViT-B ≈ 375 MB).
 
+## Uruchomienie na własnym komputerze (szybciej)
+Najszybciej z kartą NVIDIA; bez GPU nadal lepiej niż darmowy hosting (więcej RAM-u, brak limitu kafelków).
+```bash
+git clone https://github.com/lukaszkordyzon-web/grain_analyzer.git && cd grain_analyzer
+python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
+# 1) PyTorch ze strony https://pytorch.org (wybierz swoją wersję CUDA dla karty NVIDIA)
+# 2) reszta:
+pip install -r requirements-local.txt
+export GRAIN_MAX_TILES=40                               # Windows PowerShell: $env:GRAIN_MAX_TILES=40
+streamlit run app.py
+```
+W panelu bocznym aplikacja pokazuje, czy liczy na GPU czy na procesorze. `GRAIN_DEVICE=cpu|cuda|mps`
+wymusza urządzenie (MPS = Apple GPU, eksperymentalnie, nieprzetestowane).
+
 ## Tryb „Dron” (hałdy urobku, zdjęcia ukośne)
 Cała hałda na jednym zdjęciu (np. DJI Matrice 3D/4D). Skala musi wynikać z czegoś o znanym
 rozmiarze w kadrze — do wyboru w panelu:

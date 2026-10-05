@@ -1,0 +1,10 @@
+# For running on your own machine. Install PyTorch FIRST from https://pytorch.org (pick your
+# CUDA version for an NVIDIA GPU), then:  pip install -r requirements-local.txt
+numpy>=1.24
+pandas>=2.0
+matplotlib>=3.7
+pillow>=10.0
+opencv-contrib-python-headless>=4.8
+streamlit>=1.50
+streamlit-image-coordinates>=0.2
+transformers>=4.45

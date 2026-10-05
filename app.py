@@ -117,6 +117,8 @@ def results_view(res, label, wt, bins):
 
 
 with st.sidebar:
+    from grain_analyzer.device import describe_device
+    st.caption(f"Obliczenia: {describe_device()}")
     mode = st.radio("Tryb", [MODE_CLOSE, MODE_DRONE])
 
 upload = st.file_uploader("Wgraj zdjęcie", type=["jpg", "jpeg", "png", "tif", "tiff", "bmp"])

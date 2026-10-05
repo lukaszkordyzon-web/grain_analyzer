@@ -28,10 +28,11 @@ class DepthEstimator:
 
     def _load(self):
         if self._pipe is None:
-            import torch
             from transformers import pipeline
 
-            device = self.device or ("cuda" if torch.cuda.is_available() else "cpu")
+            from .device import pick_device
+
+            device = self.device or pick_device()
             self._pipe = pipeline("depth-estimation", model=self.model_id, device=device)
         return self._pipe
 

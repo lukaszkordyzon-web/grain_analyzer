@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass, field
 
 import cv2
@@ -135,7 +136,8 @@ class DroneParams:
     max_overlap: float = 0.4
     size_metric: str = "ecd"
     weighting: str = "area"               # surface fraction by size (top-view standard)
-    max_tiles: int = 8                    # guard: each tile = one SAM pass (slow, RAM-hungry)
+    # guard: each tile = one SAM pass (slow, RAM-hungry); raise it on a strong machine
+    max_tiles: int = field(default_factory=lambda: int(os.environ.get("GRAIN_MAX_TILES", "8")))
 
 
 @dataclass

@@ -104,3 +104,14 @@ def test_psd_plot_renders():
                   FakeSegmenter(masks))
     fig = plot_psd(res, "ECD")
     assert fig.axes[0].get_ylim() == (0, 100)
+
+
+def test_device_override_and_tile_limit_env(monkeypatch):
+    from grain_analyzer.device import pick_device
+    from grain_analyzer.pipeline import DroneParams
+    monkeypatch.setenv("GRAIN_DEVICE", "CPU")
+    assert pick_device() == "cpu"
+    monkeypatch.delenv("GRAIN_MAX_TILES", raising=False)
+    assert DroneParams().max_tiles == 8                  # hosted default
+    monkeypatch.setenv("GRAIN_MAX_TILES", "40")
+    assert DroneParams().max_tiles == 40                 # strong local machine
