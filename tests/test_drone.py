@@ -229,9 +229,11 @@ def test_fines_estimate_recovers_rosin_rammler():
     est = estimate_fines(b)
     assert est is not None and est["fit"]["n"] == pytest.approx(1.1, rel=0.05)
     true = {p: rr_percentile({"xc": 150.0, "n": 1.1}, p) for p in (10, 50, 90)}
-    for p in (10, 50, 90):                       # fines (D10, D50) come from extrapolation
+    for p in (50, 90):                           # D50 comes from extrapolation below the limit
         assert est["D"][f"D{p}"] == pytest.approx(true[p], rel=0.10)
-    assert est["D"]["D10"] < 200                  # below the measurement limit
+    assert est["D"]["D50"] < 200                  # below the measurement limit
+    # D10 (19 mm) lies > 5x below the 200 mm limit: not quoted
+    assert true[10] < 200 / 5 and np.isnan(est["D"]["D10"])
 
 
 def test_fines_estimate_refused_for_unfittable_data():
@@ -286,3 +288,45 @@ def test_wall_reference_end_to_end_matches_person_math():
     expected = drone.scale_map_from_camera_height((1500, 2000), f, pitch, d_true)[800, 1000]            # tile coords (900, 700) + roi origin (100, 100)
     assert res.scale.method.startswith("ściana")
     assert res.grains["mm_per_px"].iloc[0] == pytest.approx(expected, rel=0.02)
+
+
+# ---------------------------------------------------------------- segment once, measure many times
+class CountingStub(Stub):
+    calls = 0
+
+    def segment(self, tile):
+        CountingStub.calls += 1
+        return super().segment(tile)
+
+
+def test_segmentation_is_reusable_across_references():
+    from grain_analyzer.pipeline import measure_drone, segment_drone, segmentation_key
+    img, p, roi, abs_circles, circles = _scene()
+    CountingStub.calls = 0
+    seg = segment_drone(img, p, CountingStub(circles, big=False), roi)
+    n_calls = CountingStub.calls
+    head, feet = (1500, 300), (1500, 330)
+    a = measure_drone(seg, p, head, feet)                                   # person 1.75 m
+    p2 = DroneParams(**{**p.__dict__, "person_height_m": 1.95})
+    b = measure_drone(seg, p2, head, feet)                                  # taller person
+    assert CountingStub.calls == n_calls                                    # SAM not run again
+    assert (b.grains["ecd_mm"].to_numpy() != a.grains["ecd_mm"].to_numpy()).all()
+    assert len(a.grains) == len(b.grains) == 3
+    # scale-only settings do not change the cache key, segmentation settings do
+    assert segmentation_key(p, roi) == segmentation_key(p2, roi)
+    p3 = DroneParams(**{**p.__dict__, "tile": 800})
+    assert segmentation_key(p, roi) != segmentation_key(p3, roi)
+
+
+def test_preview_and_required_resolution():
+    from grain_analyzer.pipeline import preview_drone, working_side_for
+    p = DroneParams(pitch_deg=45, focal_35mm=24.0, reference="person")
+    f = focal_px(24.0, 4000, 3000)
+    z = drone.solve_person_distance((2000, 800), (2000, 830), f, 2000, 1500, 45, 1.75)
+    pv = preview_drone((3000, 4000), p, (2000, 800), (2000, 830), (500, 900, 3500, 2800))
+    assert pv is not None and pv["mm_per_px_orig"] > 0
+    assert preview_drone((3000, 4000), p, None, None, (500, 900, 3500, 2800)) is None   # incomplete
+    s_orig = pv["mm_per_px_orig"]
+    side = working_side_for(300.0, s_orig, 4000, 12)       # 30 cm stone = 12 px
+    assert side == pytest.approx(4000 * 12 * s_orig / 300.0, abs=1)
+    assert working_side_for(150.0, s_orig, 4000, 12) > side  # smaller stone -> more pixels

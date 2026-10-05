@@ -138,60 +138,78 @@ class DroneParams:
     max_tiles: int = 8                    # guard: each tile = one SAM pass (slow, RAM-hungry)
 
 
+@dataclass
+class DroneSegmentation:
+    """Result of the slow step (SAM on tiles). Independent of the scale reference, so the
+    reference, heights and statistics can be changed without running SAM again."""
+    image: np.ndarray                    # working-resolution RGB
+    labels: np.ndarray                   # int32 label image
+    boxes: dict
+    roi: tuple                           # working-resolution (x0, y0, x1, y1)
+    k: float                             # working px / original px
+    n_tiles: int
+    seconds: float
+    key: tuple = ()
+
+
+def segmentation_key(p: DroneParams, roi_xyxy, model: str = "") -> tuple:
+    """Everything that changes the segmentation (scale reference and statistics do not)."""
+    roi = None if roi_xyxy is None else tuple(round(float(v)) for v in roi_xyxy)
+    return (model, p.max_side, p.tile, round(p.min_diameter_px, 3), round(p.max_area_frac, 5),
+            p.max_overlap, roi)
+
+
+def _working_roi(image_hw, roi_xyxy, max_side):
+    h0, w0 = image_hw
+    k = min(1.0, max_side / max(h0, w0))
+    w, h = round(w0 * k), round(h0 * k)
+    roi = (0, 0, w, h) if roi_xyxy is None else tuple(int(round(v * k)) for v in roi_xyxy)
+    return k, (w, h), (max(0, roi[0]), max(0, roi[1]), min(w, roi[2]), min(h, roi[3]))
+
+
 def plan_drone(image_hw: tuple[int, int], roi_xyxy, p: DroneParams):
     """(number of SAM tiles, working-resolution ROI) for the given settings, without
     running anything - used for the cost estimate and the guard."""
     from . import drone
 
-    h0, w0 = image_hw
-    k = min(1.0, p.max_side / max(h0, w0))
-    w, h = round(w0 * k), round(h0 * k)
-    roi = (0, 0, w, h) if roi_xyxy is None else tuple(int(round(v * k)) for v in roi_xyxy)
-    roi = (max(0, roi[0]), max(0, roi[1]), min(w, roi[2]), min(h, roi[3]))
+    _, _, roi = _working_roi(image_hw, roi_xyxy, p.max_side)
     return len(drone.tile_boxes(*roi, p.tile, 0.2)), roi
 
 
-def analyze_drone(image_rgb: np.ndarray, p: DroneParams, segmenter: Segmenter,
-                  head_xy=None, feet_xy=None, roi_xyxy=None, progress=None,
-                  depth_estimator=None) -> AnalysisResult:
-    """Oblique drone photo; scale from a person, a wall of known height, or an ArUco marker
-    (``p.reference``). Points/ROI are in *original* image pixels.
+def segment_drone(image_rgb: np.ndarray, p: DroneParams, segmenter: Segmenter, roi_xyxy=None,
+                  progress=None, model: str = "") -> DroneSegmentation:
+    """Slow step: SAM on overlapping tiles of the selected area (original-pixel ROI)."""
+    import time
 
-    Default scale model: horizontal ground plane at the reference (geometry only, from
-    camera pitch + focal length). ``depth_estimator`` (a *metric* depth model) switches to
-    experimental depth-ratio scaling; such models are trained on ground-level scenes and
-    often misjudge aerial views."""
     from . import drone
-    from .camera import focal_px
 
-    if p.size_metric not in SIZE_METRICS:
-        raise ValueError(f"size_metric must be one of {list(SIZE_METRICS)}")
     image = resize_max_side(image_rgb, p.max_side)
-    k = image.shape[1] / image_rgb.shape[1]
-    h, w = image.shape[:2]
-    head = (head_xy[0] * k, head_xy[1] * k) if head_xy is not None else None
-    feet = (feet_xy[0] * k, feet_xy[1] * k) if feet_xy is not None else None
-    roi = (0, 0, w, h) if roi_xyxy is None else tuple(int(round(v * k)) for v in roi_xyxy)
-    roi = (max(0, roi[0]), max(0, roi[1]), min(w, roi[2]), min(h, roi[3]))
+    k, _, roi = _working_roi(image_rgb.shape[:2], roi_xyxy, p.max_side)
     if roi[2] - roi[0] < 50 or roi[3] - roi[1] < 50:
         raise ValueError("Zaznaczony obszar hałdy jest zbyt mały.")
-
     n_tiles, _ = plan_drone(image_rgb.shape[:2], roi_xyxy, p)
     if n_tiles > p.max_tiles:
         raise ValueError(
             f"Analiza wymagałaby {n_tiles} kafelków (limit {p.max_tiles}) i przekroczyłaby "
-            "pamięć serwera. Zmniejsz rozdzielczość roboczą, zwiększ rozmiar kafelka albo "
-            "zaznacz mniejszy obszar hałdy.")
+            "pamięć serwera. Zwiększ najmniejszy mierzony kamień, zwiększ rozmiar kafelka "
+            "albo zaznacz mniejszy obszar hałdy.")
+    t0 = time.perf_counter()
+    roi_area = (roi[2] - roi[0]) * (roi[3] - roi[1])
+    labels, boxes = drone.build_labels(
+        image, segmenter, roi, tile=p.tile, min_area_px=int(np.pi / 4 * p.min_diameter_px ** 2),
+        max_area_px=int(p.max_area_frac * roi_area), max_overlap=p.max_overlap, progress=progress)
+    return DroneSegmentation(image, labels, boxes, roi, k, n_tiles, time.perf_counter() - t0,
+                             segmentation_key(p, roi_xyxy, model))
 
+
+def _reference(image, p: DroneParams, head, feet, f, cx, cy, depth_estimator=None, progress=None):
+    """Camera height above the reference plane from the chosen reference.
+    Returns (d_cam, cal, depth, notes, exclude_mask)."""
+    from . import drone
+
+    notes: list[str] = []
     if p.reference not in REFERENCES:
         raise ValueError(f"reference must be one of {list(REFERENCES)}")
-    f = focal_px(p.focal_35mm, w, h)
-    cx, cy = w / 2, h / 2
-    notes: list[str] = []
-    exclude = None
-    depth = None
-    cal = None
-
     if p.reference == "marker":
         found = scale_mod.detect_marker(image, p.marker_size_mm, p.marker_dict)
         if found is None:
@@ -202,56 +220,69 @@ def analyze_drone(image_rgb: np.ndarray, p: DroneParams, segmenter: Segmenter,
                                  for i in range(4)]))
         if side_px < 15:
             notes.append(f"Znacznik ma tylko {side_px:.0f} px — skala jest mało dokładna.")
-        exclude = found.marker_mask(image.shape, pad_px=5)
-        head = feet = None
-    else:
-        if head is None or feet is None:
-            raise ValueError("Zaznacz dwa punkty odniesienia (dół i górę).")
-        ref_h = p.person_height_m if p.reference == "person" else p.wall_height_m
-        lean = (0.0 if p.reference == "person" or p.wall_slope_deg >= 90
-                else ref_h / math.tan(math.radians(p.wall_slope_deg)))
-        if depth_estimator is not None:
-            if progress:
-                progress(0.0, "Głębia metryczna…")
-            depth = depth_estimator.estimate(image)
-        cal = drone._calibrate(head, feet, depth, f, p.pitch_deg, ref_h, cx, cy, lean)
-        d_cam = drone.camera_height(cal.z_person_m, feet, f, cy, p.pitch_deg)
-        notes += cal.warnings
-        if p.reference == "wall":
-            notes.append("Skala ze ściany zakłada, że klikasz górną i dolną krawędź w jednym "
-                         "pionie, a ściana ma podany kąt nachylenia.")
+        return d_cam, None, None, notes, found.marker_mask(image.shape, pad_px=5)
+    if head is None or feet is None:
+        raise ValueError("Zaznacz dwa punkty odniesienia (dół i górę).")
+    ref_h = p.person_height_m if p.reference == "person" else p.wall_height_m
+    lean = (0.0 if p.reference == "person" or p.wall_slope_deg >= 90
+            else ref_h / math.tan(math.radians(p.wall_slope_deg)))
+    depth = None
+    if depth_estimator is not None:
+        if progress:
+            progress(0.0, "Głębia metryczna…")
+        depth = depth_estimator.estimate(image)
+    cal = drone._calibrate(head, feet, depth, f, p.pitch_deg, ref_h, cx, cy, lean)
+    notes += cal.warnings
+    if p.reference == "wall":
+        notes.append("Skala ze ściany zakłada, że klikasz górną i dolną krawędź w jednym "
+                     "pionie, a ściana ma podany kąt nachylenia.")
+    return drone.camera_height(cal.z_person_m, feet, f, cy, p.pitch_deg), cal, depth, notes, None
 
-    if depth is not None:
-        smap = drone.scale_map(depth, cal, head, feet)
-    else:
-        smap = drone.scale_map_from_camera_height((h, w), f, p.pitch_deg, d_cam)
 
-    roi_area = (roi[2] - roi[0]) * (roi[3] - roi[1])
-    labels, boxes = drone.build_labels(
-        image, segmenter, roi, tile=p.tile, min_area_px=int(np.pi / 4 * p.min_diameter_px ** 2),
-        max_area_px=int(p.max_area_frac * roi_area), max_overlap=p.max_overlap, progress=progress,
-        exclude=exclude)
+def measure_drone(seg: DroneSegmentation, p: DroneParams, head_xy=None, feet_xy=None,
+                  depth_estimator=None, progress=None) -> AnalysisResult:
+    """Fast step: scale reference + per-rock measurements + statistics on a finished
+    segmentation. ``head_xy``/``feet_xy`` are in *original* image pixels."""
+    from . import drone
+    from .camera import focal_px
+
+    if p.size_metric not in SIZE_METRICS:
+        raise ValueError(f"size_metric must be one of {list(SIZE_METRICS)}")
+    image, labels, roi, k = seg.image, seg.labels, seg.roi, seg.k
+    h, w = image.shape[:2]
+    head = (head_xy[0] * k, head_xy[1] * k) if head_xy is not None else None
+    feet = (feet_xy[0] * k, feet_xy[1] * k) if feet_xy is not None else None
+    f = focal_px(p.focal_35mm, w, h)
+    d_cam, cal, depth, notes, exclude = _reference(image, p, head, feet, f, w / 2, h / 2,
+                                                   depth_estimator, progress)
+    boxes = seg.boxes
+    if exclude is not None:                        # drop the reference marker itself
+        boxes = {lab: b for lab, b in boxes.items()
+                 if (exclude[b[0]:b[1], b[2]:b[3]][labels[b[0]:b[1], b[2]:b[3]] == lab]).mean() <= 0.2}
+    smap = (drone.scale_map(depth, cal, head, feet) if depth is not None
+            else drone.scale_map_from_camera_height((h, w), f, p.pitch_deg, d_cam))
     grains, contours = drone.measure_labels(labels, boxes, smap, depth)
 
     col = {"ecd": "ecd_mm", "feret_min": "feret_min_mm", "feret_max": "feret_max_mm"}[p.size_metric]
     perc = size_distribution(grains[col].to_numpy(), p.weighting) if len(grains) else {}
-    coverage = float((labels[roi[1]:roi[3], roi[0]:roi[2]] > 0).mean())
-    if depth is None:
-        notes.append("Skala zakłada, że hałda leży w płaszczyźnie terenu punktu odniesienia. "
-                     "Wyższe partie hałdy są bliżej kamery, więc ich rozmiary są lekko zawyżone.")
-    notes.append(f"Pokrycie obszaru zmierzonymi kamieniami: {coverage:.0%}. Drobniejsza frakcja "
-                 f"(średnica < {p.min_diameter_px:.0f} px ≈ "
-                 f"{p.min_diameter_px * float(np.median(smap[roi[1]:roi[3], roi[0]:roi[2]])) / 10:.0f} cm "
-                 "w środku obszaru) nie jest mierzona.")
-    scale = scale_mod.ScaleResult(float(grains["mm_per_px"].median()) if len(grains) else 0.0,
-                                  {"person": "człowiek", "wall": "ściana", "marker": "znacznik"}[p.reference]
-                                  + (" + głębia" if depth is not None else " + płaszczyzna"))
-    ann = {"roi": roi}
-    if head is not None:
-        ann.update(head=head, feet=feet)
+    kept = np.isin(labels[roi[1]:roi[3], roi[0]:roi[2]], list(boxes))
+    coverage = float(kept.mean())
     roi_smap = smap[roi[1]:roi[3], roi[0]:roi[2]].astype(np.float64)
     roi_area_mm2 = float(np.sum(roi_smap ** 2))
     min_size_mm = float(p.min_diameter_px * np.median(roi_smap))
+    if depth is None:
+        notes.append("Skala zakłada, że hałda leży w płaszczyźnie terenu punktu odniesienia. "
+                     "Wyższe partie hałdy są bliżej kamery, więc ich rozmiary są lekko zawyżone.")
+    notes.append(f"Pokrycie obszaru zmierzonymi kamieniami: {coverage:.0%}. Kamienie mniejsze niż "
+                 f"{min_size_mm / 10:.0f} cm ({p.min_diameter_px:.0f} px) nie są mierzone. "
+                 f"Segmentacja: {seg.n_tiles} kafelków w {seg.seconds:.0f} s.")
+    scale = scale_mod.ScaleResult(
+        float(grains["mm_per_px"].median()) if len(grains) else 0.0,
+        {"person": "człowiek", "wall": "ściana", "marker": "znacznik"}[p.reference]
+        + (" + głębia" if depth is not None else " + płaszczyzna"))
+    ann = {"roi": roi}
+    if head is not None:
+        ann.update(head=head, feet=feet)
     # bracketing the unmeasured fines is only meaningful on an area basis
     bounds = (passing_bounds(grains[col].to_numpy(), grains["area_mm2"].to_numpy(),
                              roi_area_mm2, min_size_mm)
@@ -259,6 +290,46 @@ def analyze_drone(image_rgb: np.ndarray, p: DroneParams, segmenter: Segmenter,
     estimate = estimate_fines(bounds) if bounds else None
     fractions = (fraction_table(grains[col].to_numpy(), grains["area_mm2"].to_numpy(),
                                 roi_area_mm2, min_size_mm) if bounds else None)
-    return AnalysisResult(image, scale, [], grains, depth, col, perc, 0, contours,
-                          ann, notes, p.weighting, roi_area_mm2, min_size_mm, bounds, estimate,
-                          fractions)
+    return AnalysisResult(image, scale, [], grains, depth, col, perc, 0, contours, ann, notes,
+                          p.weighting, roi_area_mm2, min_size_mm, bounds, estimate, fractions)
+
+
+def analyze_drone(image_rgb: np.ndarray, p: DroneParams, segmenter: Segmenter,
+                  head_xy=None, feet_xy=None, roi_xyxy=None, progress=None,
+                  depth_estimator=None) -> AnalysisResult:
+    """Oblique drone photo; scale from a person, a wall of known height, or an ArUco marker
+    (``p.reference``). Points/ROI are in *original* image pixels. Convenience wrapper:
+    ``segment_drone`` (slow) + ``measure_drone`` (fast)."""
+    seg = segment_drone(image_rgb, p, segmenter, roi_xyxy, progress)
+    return measure_drone(seg, p, head_xy, feet_xy, depth_estimator, progress)
+
+
+def preview_drone(image_hw: tuple[int, int], p: DroneParams, head_xy, feet_xy, roi_xyxy,
+                  image_rgb: np.ndarray | None = None) -> dict | None:
+    """Cheap geometry-only look at the scale BEFORE any model runs (person/wall: pure math;
+    marker: needs ``image_rgb``). Returns the median mm per ORIGINAL pixel in the area, or None
+    while the reference is not complete / not usable."""
+    from . import drone
+    from .camera import focal_px
+
+    if roi_xyxy is None:
+        return None
+    h0, w0 = image_hw
+    f = focal_px(p.focal_35mm, w0, h0)
+    try:
+        img = image_rgb if image_rgb is not None else np.zeros((1, 1, 3), np.uint8)
+        d_cam, *_ = _reference(img, p, head_xy, feet_xy, f, w0 / 2, h0 / 2)
+    except (ValueError, TypeError):
+        return None
+    rows = drone.row_scale(h0, f, p.pitch_deg, d_cam)
+    y0, y1 = max(0, int(roi_xyxy[1])), min(h0, int(roi_xyxy[3]))
+    if y1 <= y0:
+        return None
+    return {"mm_per_px_orig": float(np.median(rows[y0:y1])), "camera_height_m": float(d_cam)}
+
+
+def working_side_for(target_mm: float, mm_per_px_orig: float, long_side_orig: int,
+                     min_diameter_px: float) -> int:
+    """Working resolution (long side, px) at which a stone of ``target_mm`` is
+    ``min_diameter_px`` wide. May exceed the original size - then the photo cannot do it."""
+    return int(np.ceil(long_side_orig * min_diameter_px * mm_per_px_orig / target_mm))

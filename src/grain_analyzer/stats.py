@@ -123,6 +123,9 @@ def rr_percentile(fit: dict, p: float) -> float:
     return float(fit["xc"] * (-np.log(1 - p / 100)) ** (1 / fit["n"]))
 
 
+MAX_EXTRAPOLATION = 5.0       # estimates further than this factor below the limit are not given
+
+
 def estimate_fines(bounds: dict, min_r2: float = 0.9) -> dict | None:
     """Whole-surface estimate: Rosin-Rammler fitted to the *upper* passing curve (unmeasured
     area counted as fines) and extrapolated below the measurement limit. An estimate, not
@@ -131,8 +134,10 @@ def estimate_fines(bounds: dict, min_r2: float = 0.9) -> dict | None:
     fit = rosin_rammler_fit(bounds["sizes"], bounds["upper"])
     if fit is None or fit["r2"] < min_r2:
         return None
+    floor = float(bounds["sizes"][0]) / MAX_EXTRAPOLATION    # lowest size we are willing to quote
     d = {f"D{p}": rr_percentile(fit, p) for p in (10, 50, 90)}
-    return {"fit": fit, "D": d}
+    d = {k: (v if v >= floor else float("nan")) for k, v in d.items()}   # NaN = out of reach
+    return {"fit": fit, "D": d, "floor_mm": floor}
 
 
 def histogram(sizes: np.ndarray, bins: int = 20, weighting: str = "number"):

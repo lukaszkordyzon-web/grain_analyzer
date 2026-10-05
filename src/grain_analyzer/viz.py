@@ -90,7 +90,7 @@ def plot_psd(result, label: str, log_x: bool = True):
     x_left = xs.min()
     if est is not None:
         fit = est["fit"]
-        x_left = max(result.min_size_mm / 50, float(rr_percentile(fit, 1.5)))
+        x_left = est["floor_mm"]
         grid = np.geomspace(min(x_left, xs.min()), xs.max(), 200)
         ax.plot(grid, rr_passing(fit, grid), color=_EST, lw=2,
                 label="Szacunek całej hałdy (ekstrapolacja Rosina–Rammlera)")

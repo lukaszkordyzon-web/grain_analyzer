@@ -140,12 +140,8 @@ def camera_height_from_marker(corners, side_m: float, f_px: float, cx: float, cy
     return side_m / side
 
 
-def scale_map_from_camera_height(shape: tuple[int, int], f_px: float, pitch_deg: float,
-                                 d_m: float) -> np.ndarray:
-    """mm per pixel for every pixel from the camera height above a horizontal ground plane.
-    With zero roll the scale depends on the image row only. Rows at/above the horizon get
-    the farthest valid scale."""
-    h, w = shape
+def row_scale(h: int, f_px: float, pitch_deg: float, d_m: float) -> np.ndarray:
+    """mm per pixel for each image row (1-D, float32): cheap, needs no full-size array."""
     t = math.radians(pitch_deg)
     y = (np.arange(h, dtype=np.float64) - h / 2) / f_px
     g_d = math.cos(t) * y + math.sin(t)               # g . ray, per row
@@ -153,7 +149,16 @@ def scale_map_from_camera_height(shape: tuple[int, int], f_px: float, pitch_deg:
     z = np.full(h, np.nan)
     z[ok] = d_m / g_d[ok]
     z[~ok] = np.nanmax(z) if ok.any() else d_m
-    return (1000 * z / f_px).astype(np.float32)[:, None] * np.ones((1, w), np.float32)
+    return (1000 * z / f_px).astype(np.float32)
+
+
+def scale_map_from_camera_height(shape: tuple[int, int], f_px: float, pitch_deg: float,
+                                 d_m: float) -> np.ndarray:
+    """mm per pixel for every pixel from the camera height above a horizontal ground plane.
+    With zero roll the scale depends on the image row only. Rows at/above the horizon get
+    the farthest valid scale."""
+    h, w = shape
+    return row_scale(h, f_px, pitch_deg, d_m)[:, None] * np.ones((1, w), np.float32)
 
 
 def plane_scale_map(shape: tuple[int, int], f_px: float, pitch_deg: float, feet,

@@ -29,6 +29,11 @@ Wszystkie trzy sprowadzają się do wysokości kamery nad terenem; z niej, z ką
 (metadane DJI w oryginalnym pliku, inaczej ręcznie) liczona jest skala dla każdego wiersza zdjęcia.
 Dalej: klikasz prostokąt hałdy; SAM działa na kafelkach; pomiar z lokalną skalą.
 
+Zamiast suwaków rozdzielczości wybierasz **najmniejszy kamień do zmierzenia [cm]**; aplikacja sama
+dobiera rozdzielczość i od razu pokazuje, ile to kafelków i jak drobne kamienie faktycznie da się
+zmierzyć na tym zdjęciu. Segmentacja (wolna) jest zapamiętywana: zmiana źródła skali, wzrostu
+człowieka/ściany albo statystyk przelicza się natychmiast, bez ponownego SAM-a.
+
 **Drobnica** (kamienie mniejsze niż próg pomiaru) nie jest widoczna na zdjęciu, więc wynik ma 3 warstwy:
 1. *Skład powierzchni według frakcji* — zmierzone udziały klas + jawny wiersz „niezmierzone”.
 2. *Granice niepewności* — dolna (niezmierzone pominięte) i górna (całe niezmierzone = drobnica).

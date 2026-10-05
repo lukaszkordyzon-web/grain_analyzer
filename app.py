@@ -1,4 +1,5 @@
 """Streamlit UI:  streamlit run app.py"""
+import dataclasses
 import sys
 from pathlib import Path
 
@@ -14,7 +15,8 @@ from grain_analyzer.depth import DEPTH_MODELS, DepthEstimator  # noqa: E402
 from grain_analyzer.export import grains_csv, summary_csv  # noqa: E402
 from grain_analyzer.measure import SIZE_METRICS  # noqa: E402
 from grain_analyzer.pipeline import (REFERENCES, DroneParams, Params, analyze,  # noqa: E402
-                                     analyze_drone, plan_drone)
+                                     measure_drone, plan_drone, preview_drone,
+                                     segment_drone, working_side_for)
 from grain_analyzer.scale import ARUCO_DICTS  # noqa: E402
 from grain_analyzer.segmentation import SAM_MODELS, SamSegmenter  # noqa: E402
 from grain_analyzer.stats import WEIGHTINGS  # noqa: E402
@@ -50,14 +52,16 @@ def results_view(res, label, wt, bins):
     c = st.columns(5)
     c[0].metric("Zmierzone kamienie", len(res.grains))
     for col, (k, v) in zip(c[1:4], heads.items()):
-        col.metric(k + (" (szacunek)" if est else ""), f"{v:.1f} mm")
+        col.metric(k + (" (szacunek)" if est else ""),
+                   f"{v:.1f} mm" if np.isfinite(v) else f"< {est['floor_mm']:.0f} mm")
     c[4].metric("Skala (mediana)", f"{res.scale.mm_per_px:.3f} mm/px", res.scale.method,
                 delta_color="off")
     if est:
         st.caption("D10/D50/D90 to **szacunek dla całej powierzchni hałdy**, w tym drobnicy, "
                    "której nie widać na zdjęciu (ekstrapolacja rozkładu Rosina–Rammlera z "
                    f"kamieni większych niż {res.min_size_mm:.0f} mm; dopasowanie R² = "
-                   f"{est['fit']['r2']:.2f}). Szczegóły i granice niepewności poniżej.")
+                   f"{est['fit']['r2']:.2f}). Wartości poniżej {est['floor_mm']:.0f} mm nie są podawane "
+                   "(zbyt daleka ekstrapolacja). Szczegóły i granice niepewności poniżej.")
     if res.n_rejected_depth:
         st.caption(f"Odrzucono wg głębi: {res.n_rejected_depth}")
     for n in res.notes:
@@ -83,7 +87,7 @@ def results_view(res, label, wt, bins):
             table = {"D": list(d_lo), "dolna granica [mm]": [f"{v:.0f}" for v in d_lo.values()],
                      "górna granica [mm]": [_fmt(d_up[k], res.min_size_mm) for k in d_lo]}
             if est:
-                table["szacunek [mm]"] = [f"{est['D'][k]:.0f}" for k in d_lo]
+                table["szacunek [mm]"] = [_fmt(est["D"][k], est["floor_mm"]) for k in d_lo]
             st.dataframe(pd.DataFrame(table).set_index("D"), width="content")
 
     t1, t2, t3 = st.tabs(["Kontury", "Krzywa uziarnienia", "Dane"])
@@ -205,16 +209,19 @@ else:
         st.caption("✓ z EXIF" if meta.focal_35mm else
                    f"⚠ brak w EXIF — domyślnie {DEFAULT_FOCAL_35MM:.0f} mm (kamera szerokokątna Matrice)")
 
-        st.header("Segmentacja")
-        sam_name = st.selectbox("Model SAM", list(SAM_MODELS))
-        max_side = st.slider("Rozdzielczość robocza [px]", 1000, 3000, 2000, 250,
-                             help="Wyżej = drobniejsze kamienie, ale wolniej i więcej pamięci.")
-        tile = st.slider("Rozmiar kafelka [px]", 600, 1280, 1024, 64,
-                         help="SAM pracuje natywnie na 1024 px. Mniejszy kafelek = "
-                              "WIĘCEJ kafelków = dłużej.")
-        min_d = st.slider("Min. średnica kamienia [px]", 6, 60, 12,
-                          help="Mniejsze obiekty nie są liczone (nierozróżnialne).")
-        max_frac = st.slider("Maks. pole kamienia [% obszaru]", 0.2, 10.0, 2.0) / 100
+        st.header("Jak drobne kamienie mierzyć?")
+        target_cm = st.select_slider(
+            "Najmniejszy kamień do zmierzenia [cm]", [10, 15, 20, 25, 30, 40, 50, 60, 80], value=40,
+            help="Aplikacja sama dobiera rozdzielczość. Drobniejsze kamienie = dużo więcej "
+                 "obliczeń i wymagają zdjęcia o odpowiednio wysokiej rozdzielczości.")
+        with st.expander("Zaawansowane"):
+            sam_name = st.selectbox("Model SAM", list(SAM_MODELS))
+            tile = st.slider("Rozmiar kafelka [px]", 600, 1280, 1024, 64,
+                             help="SAM pracuje natywnie na 1024 px. Mniejszy kafelek = "
+                                  "WIĘCEJ kafelków = dłużej.")
+            min_d = st.slider("Min. średnica kamienia [px]", 6, 60, 12,
+                              help="Mniejsze obiekty nie są liczone (nierozróżnialne).")
+            max_frac = st.slider("Maks. pole kamienia [% obszaru]", 0.2, 10.0, 2.0) / 100
 
         st.header("Statystyki")
         metric = st.selectbox("Miara wielkości", list(SIZE_METRICS), format_func=SIZE_METRICS.get)
@@ -229,6 +236,7 @@ else:
     if st.session_state.get("up_id") != up_id:
         st.session_state.update(up_id=up_id, pts={}, last_click=None, _next_step=0)
         st.session_state.pop("result", None)
+        st.session_state.pop("seg_cache", None)
     pts = st.session_state.pts
     ROI_STEPS = [("roi0", "Obszar hałdy: lewy górny róg"), ("roi1", "Obszar hałdy: prawy dolny róg")]
     STEPS = {
@@ -280,31 +288,81 @@ else:
 
     needed = [k for k, _ in STEPS]
     ready = all(k in pts for k in needed)
+    st.caption(f"Zdjęcie: {W}×{H} px")
+    max_side, _roi, app_key = 2000, None, None
+    base = DroneParams(reference=ref, person_height_m=person_h, wall_height_m=wall_h,
+                       wall_slope_deg=wall_slope, marker_size_mm=marker_mm, marker_dict=marker_dict,
+                       pitch_deg=pitch, focal_35mm=focal, tile=tile, min_diameter_px=min_d,
+                       max_area_frac=max_frac, size_metric=metric, weighting=weighting)
     if "roi0" in pts and "roi1" in pts:
         _roi = (min(pts["roi0"][0], pts["roi1"][0]), min(pts["roi0"][1], pts["roi1"][1]),
                 max(pts["roi0"][0], pts["roi1"][0]), max(pts["roi0"][1], pts["roi1"][1]))
-        _plan = DroneParams(max_side=max_side, tile=tile)
-        n_t, _ = plan_drone(image.shape[:2], _roi, _plan)
-        msg = (f"Do przetworzenia: **{n_t} kafelków** (limit {_plan.max_tiles}). "
-               "Orientacyjnie ok. minuty na kafelek na darmowym serwerze (szacunek, nie pomiar).")
-        (st.warning if n_t > _plan.max_tiles else st.caption)(msg)
-        ready = ready and n_t <= _plan.max_tiles
+        pv = preview_drone((H, W), base, pts.get("head"), pts.get("feet"), _roi, image)
+        if pv is None:
+            st.info("Zaznacz wszystkie punkty, aby zobaczyć, jak drobne kamienie da się zmierzyć.")
+        else:
+            long_side = max(H, W)
+            s_orig = pv["mm_per_px_orig"]
+
+            def plan_for(t_cm):
+                need = working_side_for(t_cm * 10, s_orig, long_side, min_d)
+                side = int(min(max(need, 1000), long_side))
+                n, _ = plan_drone((H, W), _roi, dataclasses.replace(base, max_side=side))
+                return need, side, n
+
+            need, max_side, n_t = plan_for(target_cm)
+            # The cache is tied to what the user chose (target size, area, tiling), NOT to the
+            # derived resolution: that depends on the scale and would change with every tweak
+            # of the reference, defeating the point of caching.
+            app_key = (target_cm, tile, min_d, round(max_frac, 5),
+                       tuple(round(v) for v in _roi), sam_name)
+            cache = st.session_state.get("seg_cache")
+            cached = bool(cache and cache[0] == app_key)
+            if cached:
+                max_side = cache[2]
+                n_t, _ = plan_drone((H, W), _roi, dataclasses.replace(base, max_side=max_side))
+            finest_cm = min_d * s_orig / 10
+            if need > long_side:
+                st.warning(f"To zdjęcie ma za małą rozdzielczość, by mierzyć kamienie od {target_cm} cm "
+                           f"(przy pełnej rozdzielczości najmniejszy mierzony kamień to ok. "
+                           f"{finest_cm:.0f} cm). Użyję pełnej rozdzielczości.")
+            achieved_cm = min_d * s_orig * long_side / max_side / 10
+            sec = st.session_state.get("sec_per_tile")
+            msg = (f"Najmniejszy mierzony kamień ≈ **{achieved_cm:.0f} cm** · rozdzielczość robocza "
+                   f"{max_side} px · liczba kafelków: **{n_t}** (limit {base.max_tiles})"
+                   + (f" · ok. {n_t * sec / 60:.1f} min (wg poprzedniej analizy)" if sec and not cached else "")
+                   + ".")
+            if cached:
+                msg += " Segmentacja jest już policzona — zmiana skali i statystyk jest natychmiastowa."
+            if n_t > base.max_tiles:
+                fits = next((t for t in (10, 15, 20, 25, 30, 40, 50, 60, 80)
+                             if plan_for(t)[2] <= base.max_tiles), None)
+                st.warning(msg + " To za dużo dla tego serwera. "
+                           + (f"Wybierz kamienie od ≥ {fits} cm" if fits else "Zaznacz mniejszy obszar")
+                           + " albo zaznacz mniejszy obszar hałdy.")
+                ready = False
+            else:
+                st.caption(msg)
+    else:
+        ready = False
+
     if st.button("Analizuj", type="primary", disabled=not ready):
         import gc
         st.session_state.pop("result", None)
-        gc.collect()
-        x0, x1 = sorted((pts["roi0"][0], pts["roi1"][0]))
-        y0, y1 = sorted((pts["roi0"][1], pts["roi1"][1]))
-        p = DroneParams(max_side=max_side, reference=ref, person_height_m=person_h,
-                        wall_height_m=wall_h, wall_slope_deg=wall_slope, marker_size_mm=marker_mm,
-                        marker_dict=marker_dict, pitch_deg=pitch, focal_35mm=focal, tile=tile, min_diameter_px=min_d, max_area_frac=max_frac,
-                        size_metric=metric, weighting=weighting)
+        p = dataclasses.replace(base, max_side=max_side)
+        cache = st.session_state.get("seg_cache")
         bar = st.progress(0.0, "Start…")
         try:
-            st.session_state.result = analyze_drone(
-                image, p, get_segmenter(SAM_MODELS[sam_name]),
-                pts.get("head"), pts.get("feet"), (x0, y0, x1, y1),
-                progress=lambda f, t: bar.progress(f, t))
+            if cache and cache[0] == app_key:
+                seg = cache[1]
+            else:
+                st.session_state.pop("seg_cache", None)
+                gc.collect()
+                seg = segment_drone(image, p, get_segmenter(SAM_MODELS[sam_name]), _roi,
+                                    progress=lambda f, t: bar.progress(f, t), model=sam_name)
+                st.session_state.seg_cache = (app_key, seg, max_side)
+                st.session_state.sec_per_tile = seg.seconds / max(seg.n_tiles, 1)
+            st.session_state.result = measure_drone(seg, p, pts.get("head"), pts.get("feet"))
             st.session_state.meta = (SIZE_METRICS[metric], weighting, bins)
         except ValueError as e:
             st.error(str(e))
