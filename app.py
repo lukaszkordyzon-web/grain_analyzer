@@ -100,6 +100,12 @@ def results_view(res, label, wt, bins):
     with t2:
         log_x = st.checkbox("Skala logarytmiczna osi X", True)
         st.pyplot(plot_psd(res, label, log_x))
+        if res.bounds:
+            st.caption("**Jak czytać:** to jedna krzywa dla całej powierzchni hałdy. Niebieska część to "
+                       "zmierzone kamienie; na granicy pomiaru zaczyna się od udziału tego, czego nie "
+                       "zmierzono (traktowanego jako drobnica). Pomarańczowa to jej szacowany ciąg dalszy "
+                       "poniżej granicy. Jasny pas to niepewność: dolna linia oznacza, że niezmierzony "
+                       "obszar to w rzeczywistości szczeliny i cień, a nie drobnica.")
         with st.expander("Histogram częstości (pomocniczy)"):
             st.pyplot(plot_histogram(res.sizes, res.percentiles, label, wt, bins))
     with t3:

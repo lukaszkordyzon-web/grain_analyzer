@@ -135,8 +135,11 @@ def estimate_fines(bounds: dict, min_r2: float = 0.9) -> dict | None:
     if fit is None or fit["r2"] < min_r2:
         return None
     floor = float(bounds["sizes"][0]) / MAX_EXTRAPOLATION    # lowest size we are willing to quote
-    d = {f"D{p}": rr_percentile(fit, p) for p in (10, 50, 90)}
-    d = {k: (v if v >= floor else float("nan")) for k, v in d.items()}   # NaN = out of reach
+    d = {}
+    for p in (10, 50, 90):
+        measured = bounds["D_upper"][f"D{p}"]          # reachable on the measured part: use it
+        v = measured if np.isfinite(measured) else rr_percentile(fit, p)
+        d[f"D{p}"] = v if v >= floor else float("nan")   # NaN = out of reach
     return {"fit": fit, "D": d, "floor_mm": floor}
 
 

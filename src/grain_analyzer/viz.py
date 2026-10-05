@@ -63,56 +63,55 @@ _WEIGHT_LABEL = {"number": "liczby ziaren", "area": "powierzchni", "volume": "ob
 def plot_psd(result, label: str, log_x: bool = True):
     """Cumulative passing curve (particle size distribution) with D10/D50/D90.
 
-    Drone mode (area weighting) adds the unmeasured part of the surface:
-      blue solid  - measured rocks only,
-      blue dashed - unmeasured area counted as fines (upper bound), band = uncertainty,
-      orange      - Rosin-Rammler estimate of the whole surface, extrapolated below the
-                    measurement limit (an estimate, not a measurement).
+    Drone mode (area weighting) draws ONE curve for the whole analysed surface:
+      blue   - measured stones (>= measurement limit); the unmeasured area is counted as
+               fines, so the curve starts at that share (e.g. 77 %) at the limit,
+      orange - the same curve continued BELOW the limit: an estimate (Rosin-Rammler),
+      thin   - lower bound: unmeasured area is voids/shadow (stones measured alone, 0-100 %).
+    The true curve lies in the shaded band.
     """
     b, est = result.bounds, result.estimate
-    if b is not None:
-        xs, low = b["sizes"], b["lower"]
-        d_low = b["D_lower"]
-    else:
-        xs, low = cumulative_passing(result.sizes, result.weighting)
-        d_low = passing_curve_percentiles(xs, low)
-
     fig, ax = plt.subplots(figsize=(7.5, 4.4))
     fig.patch.set_alpha(0)
     ax.patch.set_alpha(0)
-    ax.plot(xs, low, color=_SERIES, lw=2,
-            label="Zmierzone kamienie" + (" (bez niezmierzonej drobnicy)" if b is not None else ""))
+    x_left = None
     if b is not None:
-        ax.plot(xs, b["upper"], color=_SERIES, lw=1.6, ls=(0, (4, 3)),
-                label="Górna granica: niezmierzony obszar = drobnica")
-        ax.fill_between(xs, low, b["upper"], color=_SERIES, alpha=0.10, lw=0)
-    d_marks = d_low
-    x_left = xs.min()
-    if est is not None:
-        fit = est["fit"]
-        x_left = est["floor_mm"]
-        grid = np.geomspace(min(x_left, xs.min()), xs.max(), 200)
-        ax.plot(grid, rr_passing(fit, grid), color=_EST, lw=2,
-                label="Szacunek całej hałdy (ekstrapolacja Rosina–Rammlera)")
-        ax.axvspan(grid.min(), result.min_size_mm, color=_MUTED, alpha=0.08, lw=0)
-        d_marks = est["D"]
+        xs, low, up = b["sizes"], b["lower"], b["upper"]
+        ax.plot(xs, up, color=_SERIES, lw=2,
+                label="Cała hałda: kamienie zmierzone")
+        ax.plot(xs, low, color=_SERIES, lw=1, alpha=0.45,
+                label="Dolna granica (niezmierzone = szczeliny/cień)")
+        ax.fill_between(xs, low, up, color=_SERIES, alpha=0.10, lw=0)
+        if est is not None:                       # continue the same curve below the limit
+            fit = est["fit"]
+            x_left = est["floor_mm"]
+            grid = np.geomspace(x_left, xs[0], 80)
+            ax.plot(np.append(grid, xs[0]), np.append(rr_passing(fit, grid), up[0]),
+                    color=_EST, lw=2, label="Szacunek poniżej progu (Rosin–Rammler)")
+            ax.axvspan(x_left, xs[0], color=_MUTED, alpha=0.08, lw=0)
+        marks = est["D"] if est is not None else b["D_upper"]
+        mark_x0 = xs[0]
+    else:
+        xs, low = cumulative_passing(result.sizes, result.weighting)
+        ax.plot(xs, low, color=_SERIES, lw=2, label="Zmierzone kamienie")
+        marks, mark_x0 = passing_curve_percentiles(xs, low), 0
     if result.min_size_mm:
         ax.axvline(result.min_size_mm, color=_MUTED, lw=1, ls=":")
         ax.text(result.min_size_mm, 101.5, " próg pomiaru", color=_INK, fontsize=8, va="bottom")
 
-    mark_color = _EST if est is not None else _SERIES
-    for (name, val), p in zip(d_marks.items(), (10, 50, 90)):
+    for (name, val), p in zip(marks.items(), (10, 50, 90)):
         ax.axhline(p, color=_MUTED, lw=0.6, alpha=0.6)
         if np.isfinite(val):
-            ax.plot([val], [p], "o", ms=6, color=mark_color, mec="none")
-            ax.annotate(f"{name} = {val:.0f} mm", (val, p), xytext=(6, -12),
-                        textcoords="offset points", color=_INK, fontsize=9)
+            ax.plot([val], [p], "o", ms=6, color=_EST if val < mark_x0 else _SERIES, mec="none")
+            ax.annotate(f"{name} = {val:.0f} mm" + (" (szac.)" if val < mark_x0 else ""), (val, p),
+                        xytext=(6, -12), textcoords="offset points", color=_INK, fontsize=9)
+    x_min = min(v for v in (x_left, xs.min()) if v is not None)
     if log_x:
         ax.set_xscale("log")
         ax.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g}"))
         ax.xaxis.set_minor_formatter(matplotlib.ticker.FuncFormatter(
             lambda v, _: f"{v:g}" if f"{v:.0e}"[0] in "25" else ""))   # label 2x and 5x ticks
-    ax.set_xlim(left=min(x_left, xs.min()) * 0.95)
+    ax.set_xlim(left=x_min * 0.95)
     ax.set_ylim(0, 100)
     ax.set_yticks(range(0, 101, 10))
     ax.set_xlabel(f"{label} [mm]", color=_INK)

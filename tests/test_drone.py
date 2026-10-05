@@ -330,3 +330,24 @@ def test_preview_and_required_resolution():
     side = working_side_for(300.0, s_orig, 4000, 12)       # 30 cm stone = 12 px
     assert side == pytest.approx(4000 * 12 * s_orig / 300.0, abs=1)
     assert working_side_for(150.0, s_orig, 4000, 12) > side  # smaller stone -> more pixels
+
+
+def test_headline_d_uses_measured_part_and_curve_is_one_basis():
+    """D values reachable on the measured part come from the curve itself (not the RR fit);
+    the main plotted line is the whole-surface curve, starting at the unmeasured share."""
+    import pandas as pd
+    from grain_analyzer import scale as sm
+    from grain_analyzer.pipeline import AnalysisResult
+    from grain_analyzer.stats import estimate_fines, passing_bounds
+    from grain_analyzer.viz import plot_psd
+    d, a = _rr_scene(xc=90.0, n=0.75, d_min=170.0)
+    b = passing_bounds(d, a, 1.0, 170.0)
+    est = estimate_fines(b)
+    assert est["D"]["D90"] == pytest.approx(b["D_upper"]["D90"])     # measured, not extrapolated
+    res = AnalysisResult(np.zeros((5, 5, 3), np.uint8), sm.ScaleResult(1.0, "x"), [],
+                         pd.DataFrame({"ecd_mm": d, "area_mm2": a}), None, "ecd_mm", {}, 0, [], {},
+                         [], "area", 1.0, 170.0, b, est, [])
+    fig = plot_psd(res, "ECD")
+    main = fig.axes[0].lines[0]                    # first line = whole-surface (upper) curve
+    assert main.get_ydata()[0] == pytest.approx(b["unmeasured_fraction"] * 100)   # starts at ~80 %, not 0
+    assert fig.axes[0].lines[1].get_ydata()[0] == pytest.approx(0)               # lower bound starts at 0
