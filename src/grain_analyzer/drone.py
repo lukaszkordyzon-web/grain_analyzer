@@ -12,6 +12,7 @@ Scale model (pinhole camera, zero roll):
 """
 from __future__ import annotations
 
+import gc
 import math
 from dataclasses import dataclass
 
@@ -167,7 +168,8 @@ def build_labels(image: np.ndarray, segmenter, roi, *, tile: int = 800, overlap:
         if progress:
             progress(n / len(tiles), f"Kafelek {n + 1}/{len(tiles)}")
         sub = labels[ya:yb, xa:xb]                    # view
-        for mask, _score in sorted(segmenter.segment(image[ya:yb, xa:xb]), key=lambda c: -c[1]):
+        cands = segmenter.segment(image[ya:yb, xa:xb])
+        for mask, _score in sorted(cands, key=lambda c: -c[1]):
             area = int(mask.sum())
             if area < min_area_px or area > max_area_px:
                 continue
@@ -185,6 +187,8 @@ def build_labels(image: np.ndarray, segmenter, roi, *, tile: int = 800, overlap:
             sub[free] = nxt
             boxes[nxt] = (ya + top, ya + bot + 1, xa + left, xa + right + 1)
             nxt += 1
+        del cands                                     # hundreds of tile-sized masks
+        gc.collect()
     if progress:
         progress(1.0, "Gotowe")
     return labels, boxes

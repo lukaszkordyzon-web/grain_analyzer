@@ -139,3 +139,15 @@ def test_camera_meta_dji_xmp():
     m = read_camera_meta(b"\xff\xd8" + xmp)
     assert m.gimbal_pitch_deg == pytest.approx(-52.3) and m.rel_altitude_m == pytest.approx(61.2)
     assert math.isclose(focal_px(24, 4000, 3000), 24 * 5000 / 43.267)
+
+
+def test_tile_guard_refuses_heavy_settings():
+    from grain_analyzer.pipeline import plan_drone
+    img = np.zeros((3000, 4000, 3), np.uint8)
+    heavy = DroneParams(max_side=4000, tile=600)
+    n, _ = plan_drone(img.shape[:2], (0, 0, 4000, 3000), heavy)
+    assert n > heavy.max_tiles
+    with pytest.raises(ValueError, match="kafelków"):
+        analyze_drone(img, heavy, Stub([]), (100, 100), (100, 130), (0, 0, 4000, 3000))
+    light = DroneParams(max_side=2000, tile=1024)
+    assert plan_drone(img.shape[:2], (0, 0, 4000, 3000), light)[0] <= light.max_tiles

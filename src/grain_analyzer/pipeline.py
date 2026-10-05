@@ -120,6 +120,20 @@ class DroneParams:
     max_overlap: float = 0.4
     size_metric: str = "ecd"
     weighting: str = "area"               # surface fraction by size (top-view standard)
+    max_tiles: int = 8                    # guard: each tile = one SAM pass (slow, RAM-hungry)
+
+
+def plan_drone(image_hw: tuple[int, int], roi_xyxy, p: DroneParams):
+    """(number of SAM tiles, working-resolution ROI) for the given settings, without
+    running anything - used for the cost estimate and the guard."""
+    from . import drone
+
+    h0, w0 = image_hw
+    k = min(1.0, p.max_side / max(h0, w0))
+    w, h = round(w0 * k), round(h0 * k)
+    roi = (0, 0, w, h) if roi_xyxy is None else tuple(int(round(v * k)) for v in roi_xyxy)
+    roi = (max(0, roi[0]), max(0, roi[1]), min(w, roi[2]), min(h, roi[3]))
+    return len(drone.tile_boxes(*roi, p.tile, 0.2)), roi
 
 
 def analyze_drone(image_rgb: np.ndarray, p: DroneParams, segmenter: Segmenter,
@@ -146,6 +160,13 @@ def analyze_drone(image_rgb: np.ndarray, p: DroneParams, segmenter: Segmenter,
     roi = (max(0, roi[0]), max(0, roi[1]), min(w, roi[2]), min(h, roi[3]))
     if roi[2] - roi[0] < 50 or roi[3] - roi[1] < 50:
         raise ValueError("Zaznaczony obszar hałdy jest zbyt mały.")
+
+    n_tiles, _ = plan_drone(image_rgb.shape[:2], roi_xyxy, p)
+    if n_tiles > p.max_tiles:
+        raise ValueError(
+            f"Analiza wymagałaby {n_tiles} kafelków (limit {p.max_tiles}) i przekroczyłaby "
+            "pamięć serwera. Zmniejsz rozdzielczość roboczą, zwiększ rozmiar kafelka albo "
+            "zaznacz mniejszy obszar hałdy.")
 
     f = focal_px(p.focal_35mm, w, h)
     depth = None

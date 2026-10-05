@@ -13,7 +13,7 @@ from grain_analyzer.camera import DEFAULT_FOCAL_35MM, read_camera_meta  # noqa: 
 from grain_analyzer.depth import DEPTH_MODELS, DepthEstimator  # noqa: E402
 from grain_analyzer.export import grains_csv, summary_csv  # noqa: E402
 from grain_analyzer.measure import SIZE_METRICS  # noqa: E402
-from grain_analyzer.pipeline import DroneParams, Params, analyze, analyze_drone  # noqa: E402
+from grain_analyzer.pipeline import DroneParams, Params, analyze, analyze_drone, plan_drone  # noqa: E402
 from grain_analyzer.scale import ARUCO_DICTS  # noqa: E402
 from grain_analyzer.segmentation import SAM_MODELS, SamSegmenter  # noqa: E402
 from grain_analyzer.stats import WEIGHTINGS  # noqa: E402
@@ -173,9 +173,11 @@ else:
 
         st.header("Segmentacja")
         sam_name = st.selectbox("Model SAM", list(SAM_MODELS))
-        max_side = st.slider("Rozdzielczość robocza [px]", 1000, 4000, 2000, 250)
-        tile = st.slider("Rozmiar kafelka [px]", 500, 1200, 800, 50,
-                         help="Mniejszy kafelek = drobniejsze kamienie, ale dłużej.")
+        max_side = st.slider("Rozdzielczość robocza [px]", 1000, 3000, 2000, 250,
+                             help="Wyżej = drobniejsze kamienie, ale wolniej i więcej pamięci.")
+        tile = st.slider("Rozmiar kafelka [px]", 600, 1280, 1024, 64,
+                         help="SAM pracuje natywnie na 1024 px. Mniejszy kafelek = "
+                              "WIĘCEJ kafelków = dłużej.")
         min_d = st.slider("Min. średnica kamienia [px]", 6, 60, 12,
                           help="Mniejsze obiekty nie są liczone (nierozróżnialne).")
         max_frac = st.slider("Maks. pole kamienia [% obszaru]", 0.2, 10.0, 2.0) / 100
@@ -225,6 +227,15 @@ else:
                "Obszar hałdy zawęża analizę do kamieni (bez ścian, kałuż i podłoża).")
 
     ready = all(k in pts for k in ("head", "feet", "roi0", "roi1"))
+    if "roi0" in pts and "roi1" in pts:
+        _roi = (min(pts["roi0"][0], pts["roi1"][0]), min(pts["roi0"][1], pts["roi1"][1]),
+                max(pts["roi0"][0], pts["roi1"][0]), max(pts["roi0"][1], pts["roi1"][1]))
+        _plan = DroneParams(max_side=max_side, tile=tile)
+        n_t, _ = plan_drone(image.shape[:2], _roi, _plan)
+        msg = (f"Do przetworzenia: **{n_t} kafelków** (limit {_plan.max_tiles}). "
+               "Orientacyjnie ok. minuty na kafelek na darmowym serwerze (szacunek, nie pomiar).")
+        (st.warning if n_t > _plan.max_tiles else st.caption)(msg)
+        ready = ready and n_t <= _plan.max_tiles
     if st.button("Analizuj", type="primary", disabled=not ready):
         import gc
         st.session_state.pop("result", None)
