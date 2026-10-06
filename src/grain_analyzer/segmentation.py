@@ -104,9 +104,9 @@ class UltralyticsSegmenter:
     fetched from the project's GitHub releases into ``weights_dir()`` on first use."""
 
     def __init__(self, weights: str, family: str = "sam", device: str | None = None,
-                 imgsz: int = 1024, conf: float = 0.2, iou: float = 0.7):
+                 imgsz: int = 1024, conf: float = 0.2, iou: float = 0.7, max_det: int = 2000):
         self.weights, self.family, self.device = weights, family, device
-        self.imgsz, self.conf, self.iou = imgsz, conf, iou
+        self.imgsz, self.conf, self.iou, self.max_det = imgsz, conf, iou, max_det
         self._model = None
 
     def _load(self):
@@ -126,7 +126,10 @@ class UltralyticsSegmenter:
         model = self._load()
         kw = dict(verbose=False, device=self.device or pick_device())
         if self.family == "fastsam":
-            kw.update(imgsz=self.imgsz, conf=self.conf, iou=self.iou, retina_masks=True)
+            # max_det: ultralytics keeps only the 300 best detections per image by default, which
+            # silently drops the small stones in a dense pile (observed: 300 -> 513 masks per tile)
+            kw.update(imgsz=self.imgsz, conf=self.conf, iou=self.iou, retina_masks=True,
+                      max_det=self.max_det)
         r = model(np.ascontiguousarray(image_rgb[..., ::-1]), **kw)[0]     # ultralytics expects BGR
         if r.masks is None:
             return []
@@ -169,6 +172,8 @@ class SegmenterSpec:
     family: str = "sam"
     note: str = ""
     tested: bool = True     # exercised in this project with the real weights
+    tile: int = 1024        # preferred SAM tile size [px]
+    max_tiles: int = 8      # tile budget on a small host (slow models: few tiles)
 
 
 SEGMENTERS: dict[str, SegmenterSpec] = {
@@ -179,8 +184,10 @@ SEGMENTERS: dict[str, SegmenterSpec] = {
     "sam2.1-t": SegmenterSpec("SAM 2.1 tiny", "ultralytics", "sam2.1_t.pt"),
     "sam2.1-b": SegmenterSpec("SAM 2.1 base", "ultralytics", "sam2.1_b.pt"),
     "mobile": SegmenterSpec("MobileSAM", "ultralytics", "mobile_sam.pt"),
+    # FastSAM is ~30x faster per tile and a smaller tile (upscaled to its 1024 input) shows small
+    # stones larger and keeps the per-tile mask memory low -> smaller tiles, bigger budget
     "fastsam": SegmenterSpec("FastSAM (bardzo szybki, mniej dokładny)", "ultralytics",
-                             "FastSAM-s.pt", family="fastsam"),
+                             "FastSAM-s.pt", family="fastsam", tile=640, max_tiles=30),
     "sam-hq": SegmenterSpec("SAM-HQ (ostrzejsze krawędzie)", "hf",
                             "syscv-community/sam-hq-vit-base", tested=False,
                             note="Nieprzetestowany: wagi tylko z Hugging Face."),

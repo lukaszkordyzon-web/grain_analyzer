@@ -385,9 +385,11 @@ else:
                  "obliczeń i wymagają zdjęcia o odpowiednio wysokiej rozdzielczości.")
         with st.expander("Zaawansowane"):
             sam_name = pick_segmenter()
-            tile = st.slider("Rozmiar kafelka [px]", 600, 1280, 1024, 64,
-                             help="SAM pracuje natywnie na 1024 px. Mniejszy kafelek = "
-                                  "WIĘCEJ kafelków = dłużej.")
+            spec = available_segmenters()[sam_name]
+            tile = st.slider("Rozmiar kafelka [px]", 480, 1280, spec.tile, 32, key=f"tile_{sam_name}",
+                             help="SAM pracuje natywnie na 1024 px. Mniejszy kafelek = więcej kafelków "
+                                  "(dłużej), ale drobniejsze kamienie i mniej pamięci na kafelek. Dla "
+                                  "FastSAM domyślnie 640 px.")
             min_d = st.slider("Min. średnica kamienia [px]", 6, 60, 12,
                               help="Mniejsze obiekty nie są liczone (nierozróżnialne).")
             max_frac = st.slider("Maks. pole kamienia [% obszaru]", 0.2, 10.0, 2.0) / 100
@@ -468,7 +470,8 @@ else:
                        wall_slope_deg=wall_slope, marker_size_mm=marker_mm, marker_dict=marker_dict,
                        pitch_deg=pitch, focal_35mm=focal, tile=tile, min_diameter_px=min_d,
                        max_area_frac=max_frac, size_metric=metric, weighting=weighting,
-                       shadow_ratio=0.6 if shadow_on else 0.0, max_stone_mm=max_stone_m * 1000)
+                       shadow_ratio=0.6 if shadow_on else 0.0, max_stone_mm=max_stone_m * 1000,
+                       max_tiles=max(DroneParams().max_tiles, spec.max_tiles))
     if "roi0" in pts and "roi1" in pts:
         _roi = (min(pts["roi0"][0], pts["roi1"][0]), min(pts["roi0"][1], pts["roi1"][1]),
                 max(pts["roi0"][0], pts["roi1"][0]), max(pts["roi0"][1], pts["roi1"][1]))
