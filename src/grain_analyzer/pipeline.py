@@ -136,6 +136,8 @@ class DroneParams:
     max_overlap: float = 0.4
     size_metric: str = "ecd"
     weighting: str = "area"               # surface fraction by size (top-view standard)
+    max_stone_mm: float = 3000.0          # larger "stones" are masks of shadow/wall; 0 = no cap
+    shadow_ratio: float = 0.6             # drop uniform patches darker than this x surroundings; 0 = off
     # guard: each tile = one SAM pass (slow, RAM-hungry); raise it on a strong machine
     max_tiles: int = field(default_factory=lambda: int(os.environ.get("GRAIN_MAX_TILES", "8")))
 
@@ -263,12 +265,21 @@ def measure_drone(seg: DroneSegmentation, p: DroneParams, head_xy=None, feet_xy=
                  if (exclude[b[0]:b[1], b[2]:b[3]][labels[b[0]:b[1], b[2]:b[3]] == lab]).mean() <= 0.2}
     smap = (drone.scale_map(depth, cal, head, feet) if depth is not None
             else drone.scale_map_from_camera_height((h, w), f, p.pitch_deg, d_cam))
-    grains, contours = drone.measure_labels(labels, boxes, smap, depth)
+    shadows = (drone.shadow_labels(image, labels, boxes, p.shadow_ratio)
+               if p.shadow_ratio and p.shadow_ratio > 0 else set())
+    boxes = {lab: b for lab, b in boxes.items() if lab not in shadows}
+    grains, contours = drone.measure_labels(labels, boxes, smap, depth,
+                                            p.max_stone_mm if p.max_stone_mm else None)
+    n_oversize = len(boxes) - len(grains)
 
     col = {"ecd": "ecd_mm", "feret_min": "feret_min_mm", "feret_max": "feret_max_mm"}[p.size_metric]
     perc = size_distribution(grains[col].to_numpy(), p.weighting) if len(grains) else {}
-    kept = np.isin(labels[roi[1]:roi[3], roi[0]:roi[2]], list(boxes))
+    kept = (np.isin(labels[roi[1]:roi[3], roi[0]:roi[2]], grains["mask_label"].to_numpy())
+            if len(grains) else np.zeros(1, bool))
     coverage = float(kept.mean())
+    if shadows or n_oversize > 0:
+        notes.append(f"Odrzucono: {len(shadows)} masek wyglądających na cienie i {max(n_oversize, 0)} "
+                     f"zbyt dużych (> {p.max_stone_mm / 1000:.1f} m).")
     roi_smap = smap[roi[1]:roi[3], roi[0]:roi[2]].astype(np.float64)
     roi_area_mm2 = float(np.sum(roi_smap ** 2))
     min_size_mm = float(p.min_diameter_px * np.median(roi_smap))

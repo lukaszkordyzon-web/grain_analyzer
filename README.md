@@ -33,6 +33,14 @@ Sprawdzenie GPU: `python -c "import torch; print(torch.cuda.is_available())"` (o
 W panelu bocznym aplikacja pokazuje, czy liczy na GPU czy na procesorze. `GRAIN_DEVICE=cpu|cuda|mps`
 wymusza urządzenie (MPS = Apple GPU, eksperymentalnie, nieprzetestowane).
 
+## Modele segmentacji
+Domyślnie SAM ViT-B (Hugging Face). Dodatkowo (menu „Model segmentacji”): **SAM 2.1**, **MobileSAM**,
+**FastSAM** — przez pakiet `ultralytics`, który **nie jest** w domyślnych wymaganiach (ciągnie drugi OpenCV
+i na hostingu mógłby zepsuć aplikację); doinstaluj go lokalnie: `pip install ultralytics`. Wagi pobierają się
+same z GitHuba do `~/.cache/grain_analyzer/weights` (`GRAIN_WEIGHTS_DIR`). **SAM-HQ** (Hugging Face) i
+**SAM 3** (wagi wymagają zgody na Hugging Face; ustaw `GRAIN_SAM3_WEIGHTS`) są w kodzie, ale
+**nieprzetestowane** — oznaczone w menu. Wyniki porównania na jednym kafelku: patrz opis zmian.
+
 ## Tryb „Dron” (hałdy urobku, zdjęcia ukośne)
 Cała hałda na jednym zdjęciu (np. DJI Matrice 3D/4D). Skala musi wynikać z czegoś o znanym
 rozmiarze w kadrze — do wyboru w panelu:

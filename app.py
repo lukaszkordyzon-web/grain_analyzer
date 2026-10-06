@@ -18,7 +18,7 @@ from grain_analyzer.pipeline import (REFERENCES, DroneParams, Params, analyze,  
                                      measure_drone, plan_drone, preview_drone,
                                      segment_drone, working_side_for)
 from grain_analyzer.scale import ARUCO_DICTS  # noqa: E402
-from grain_analyzer.segmentation import SAM_MODELS, SamSegmenter  # noqa: E402
+from grain_analyzer.segmentation import available_segmenters, make_segmenter  # noqa: E402
 from grain_analyzer.stats import WEIGHTINGS  # noqa: E402
 from grain_analyzer.viz import depth_preview, draw_overlay, plot_histogram, plot_psd  # noqa: E402
 
@@ -30,8 +30,17 @@ MODE_DRONE = "Dron — zdjęcie całej hałdy"
 
 
 @st.cache_resource(show_spinner="Ładowanie modelu SAM…")
-def get_segmenter(model_id: str) -> SamSegmenter:
-    return SamSegmenter(model_id)
+def get_segmenter(key: str):
+    return make_segmenter(key)
+
+
+def pick_segmenter(label="Model segmentacji"):
+    av = available_segmenters()
+    key = st.selectbox(label, list(av), format_func=lambda k: av[k].label
+                       + ("" if av[k].tested else " (nieprzetestowany)"))
+    if av[key].note:
+        st.caption(av[key].note)
+    return key
 
 
 @st.cache_resource(show_spinner="Ładowanie modelu głębi…")
@@ -146,7 +155,7 @@ if mode == MODE_CLOSE:
             marker_id = None if marker_id < 0 else int(marker_id)
 
         st.header("Modele")
-        sam_name = st.selectbox("Segmentacja", list(SAM_MODELS))
+        sam_name = pick_segmenter("Segmentacja")
         use_depth = st.checkbox("Użyj głębi (Depth Anything V2) — więcej RAM", False)
         depth_name = st.selectbox("Model głębi", list(DEPTH_MODELS), disabled=not use_depth)
         reject = st.checkbox("Odrzucaj obiekty z tła (wg głębi)", True, disabled=not use_depth)
@@ -175,7 +184,7 @@ if mode == MODE_CLOSE:
         try:
             with st.spinner("Segmentacja… (na CPU może potrwać minutę)"):
                 st.session_state.result = analyze(
-                    image, params, get_segmenter(SAM_MODELS[sam_name]),
+                    image, params, get_segmenter(sam_name),
                     get_depth(DEPTH_MODELS[depth_name]) if use_depth else None)
             st.session_state.meta = (SIZE_METRICS[metric], weighting, bins)
         except ValueError as e:
@@ -223,13 +232,18 @@ else:
             help="Aplikacja sama dobiera rozdzielczość. Drobniejsze kamienie = dużo więcej "
                  "obliczeń i wymagają zdjęcia o odpowiednio wysokiej rozdzielczości.")
         with st.expander("Zaawansowane"):
-            sam_name = st.selectbox("Model SAM", list(SAM_MODELS))
+            sam_name = pick_segmenter()
             tile = st.slider("Rozmiar kafelka [px]", 600, 1280, 1024, 64,
                              help="SAM pracuje natywnie na 1024 px. Mniejszy kafelek = "
                                   "WIĘCEJ kafelków = dłużej.")
             min_d = st.slider("Min. średnica kamienia [px]", 6, 60, 12,
                               help="Mniejsze obiekty nie są liczone (nierozróżnialne).")
             max_frac = st.slider("Maks. pole kamienia [% obszaru]", 0.2, 10.0, 2.0) / 100
+            shadow_on = st.checkbox("Odrzucaj cienie (ciemne, jednolite plamy)", True,
+                                    help="Rzucany cień obok głazu bywa obrysowany jak kamień. "
+                                         "Ciemny kamień w zacienionym miejscu zostaje.")
+            max_stone_m = st.number_input("Maks. rozmiar kamienia [m]", 0.5, 20.0, 3.0, 0.5,
+                                          help="Większe „kamienie” to zwykle maski cienia lub ściany.")
 
         st.header("Statystyki")
         metric = st.selectbox("Miara wielkości", list(SIZE_METRICS), format_func=SIZE_METRICS.get)
@@ -301,7 +315,8 @@ else:
     base = DroneParams(reference=ref, person_height_m=person_h, wall_height_m=wall_h,
                        wall_slope_deg=wall_slope, marker_size_mm=marker_mm, marker_dict=marker_dict,
                        pitch_deg=pitch, focal_35mm=focal, tile=tile, min_diameter_px=min_d,
-                       max_area_frac=max_frac, size_metric=metric, weighting=weighting)
+                       max_area_frac=max_frac, size_metric=metric, weighting=weighting,
+                       shadow_ratio=0.6 if shadow_on else 0.0, max_stone_mm=max_stone_m * 1000)
     if "roi0" in pts and "roi1" in pts:
         _roi = (min(pts["roi0"][0], pts["roi1"][0]), min(pts["roi0"][1], pts["roi1"][1]),
                 max(pts["roi0"][0], pts["roi1"][0]), max(pts["roi0"][1], pts["roi1"][1]))
@@ -366,7 +381,7 @@ else:
             else:
                 st.session_state.pop("seg_cache", None)
                 gc.collect()
-                seg = segment_drone(image, p, get_segmenter(SAM_MODELS[sam_name]), _roi,
+                seg = segment_drone(image, p, get_segmenter(sam_name), _roi,
                                     progress=lambda f, t: bar.progress(f, t), model=sam_name)
                 st.session_state.seg_cache = (app_key, seg, max_side)
                 st.session_state.sec_per_tile = seg.seconds / max(seg.n_tiles, 1)

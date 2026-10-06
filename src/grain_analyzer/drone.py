@@ -238,9 +238,33 @@ def build_labels(image: np.ndarray, segmenter, roi, *, tile: int = 800, overlap:
     return labels, boxes
 
 
+def shadow_labels(image_rgb: np.ndarray, labels: np.ndarray, boxes: dict, ratio: float = 0.6,
+                  max_std: float = 40.0, ring_px: int = 8) -> set:
+    """Labels that look like cast shadows: much darker than their immediate surroundings AND
+    nearly uniform. A dark rock in a shadowed area is as dark as its neighbours, so it stays."""
+    gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY).astype(np.float32)
+    kern = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * ring_px + 1,) * 2)
+    h, w = gray.shape
+    out = set()
+    for lab, (ya, yb, xa, xb) in boxes.items():
+        y0, y1, x0, x1 = max(0, ya - ring_px - 4), min(h, yb + ring_px + 4), max(0, xa - ring_px - 4), min(w, xb + ring_px + 4)
+        m = (labels[y0:y1, x0:x1] == lab).astype(np.uint8)
+        ring = cv2.dilate(m, kern).astype(bool) & ~m.astype(bool)
+        if not ring.any():
+            continue
+        g = gray[y0:y1, x0:x1]
+        ring_mean = float(g[ring].mean())
+        if ring_mean < 15:                       # surroundings almost black: the ratio means nothing
+            continue
+        if g[m > 0].mean() / ring_mean < ratio and g[m > 0].std() < max_std:
+            out.add(lab)
+    return out
+
+
 def measure_labels(labels: np.ndarray, boxes: dict, scale_mm_px: np.ndarray,
-                   depth_m: np.ndarray | None = None):
-    """Per-rock geometry with the local scale. Returns (DataFrame, contours)."""
+                   depth_m: np.ndarray | None = None, max_size_mm: float | None = None):
+    """Per-rock geometry with the local scale. Returns (DataFrame, contours). Rocks larger
+    than ``max_size_mm`` (ECD) are dropped - physically implausible (shadow/wall masks)."""
     rows, contours = [], []
     for lab, (ya, yb, xa, xb) in boxes.items():
         mask = labels[ya:yb, xa:xb] == lab
@@ -248,8 +272,9 @@ def measure_labels(labels: np.ndarray, boxes: dict, scale_mm_px: np.ndarray,
             continue
         s = float(np.median(scale_mm_px[ya:yb, xa:xb][mask]))
         row = grain_geometry(mask, s)
-        if row is None:
+        if row is None or (max_size_mm and row["ecd_mm"] > max_size_mm):
             continue
+        row["mask_label"] = int(lab)
         cnts, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL,
                                    cv2.CHAIN_APPROX_SIMPLE)
         contours.append(max(cnts, key=cv2.contourArea) + np.array([xa, ya]))

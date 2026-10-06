@@ -87,7 +87,7 @@ class ConstDepth:
 
 def _scene(max_area=0.05):
     img = np.zeros((1500, 2000, 3), np.uint8)
-    p = DroneParams(max_side=2000, pitch_deg=45, focal_35mm=36.0, tile=2000, max_area_frac=max_area)
+    p = DroneParams(max_stone_mm=0.0, max_side=2000, pitch_deg=45, focal_35mm=36.0, tile=2000, max_area_frac=max_area)
     roi = (100, 100, 1900, 1400)
     abs_circles = [(400, 400, 30), (900, 700, 45), (1400, 1100, 60)]
     circles = [(x - roi[0], y - roi[1], r) for x, y, r in abs_circles]
@@ -144,12 +144,12 @@ def test_camera_meta_dji_xmp():
 def test_tile_guard_refuses_heavy_settings():
     from grain_analyzer.pipeline import plan_drone
     img = np.zeros((3000, 4000, 3), np.uint8)
-    heavy = DroneParams(max_side=4000, tile=600)
+    heavy = DroneParams(max_stone_mm=0.0, max_side=4000, tile=600)
     n, _ = plan_drone(img.shape[:2], (0, 0, 4000, 3000), heavy)
     assert n > heavy.max_tiles
     with pytest.raises(ValueError, match="kafelków"):
         analyze_drone(img, heavy, Stub([]), (100, 100), (100, 130), (0, 0, 4000, 3000))
-    light = DroneParams(max_side=2000, tile=1024)
+    light = DroneParams(max_stone_mm=0.0, max_side=2000, tile=1024)
     assert plan_drone(img.shape[:2], (0, 0, 4000, 3000), light)[0] <= light.max_tiles
 
 
@@ -258,7 +258,7 @@ def test_marker_reference_nadir_scale():
     img[100:300, 100:300] = cv2.aruco.generateImageMarker(dic, 3, 200)[..., None]
     marker_blob = np.zeros((1300, 1800), bool)     # tile = roi (1800 x 1300)
     marker_blob[0:200, 0:200] = True              # SAM would also segment the marker itself
-    p = DroneParams(max_side=2000, reference="marker", marker_size_mm=200.0, pitch_deg=90,
+    p = DroneParams(max_stone_mm=0.0, max_side=2000, reference="marker", marker_size_mm=200.0, pitch_deg=90,
                     focal_35mm=36.0, tile=2000, max_area_frac=0.05)
     circles = [(800, 600, 40), (1200, 900, 55)]
     stub = Stub(circles, big=False)
@@ -281,7 +281,7 @@ def test_wall_reference_end_to_end_matches_person_math():
     foot = _ground_point((1000, 900), d_true, f, 1000, 750, pitch)
     top = foot - wall_h * drone._down_vector(pitch)
     feet_px, head_px = _project(foot, f, 1000, 750), _project(top, f, 1000, 750)
-    p = DroneParams(max_side=2000, reference="wall", wall_height_m=wall_h, wall_slope_deg=90,
+    p = DroneParams(max_stone_mm=0.0, max_side=2000, reference="wall", wall_height_m=wall_h, wall_slope_deg=90,
                     pitch_deg=pitch, focal_35mm=24.0, tile=2000, max_area_frac=0.05)
     res = analyze_drone(img, p, Stub([(900, 700, 40)], big=False), head_px, feet_px,
                         (100, 100, 1900, 1400))
@@ -320,7 +320,7 @@ def test_segmentation_is_reusable_across_references():
 
 def test_preview_and_required_resolution():
     from grain_analyzer.pipeline import preview_drone, working_side_for
-    p = DroneParams(pitch_deg=45, focal_35mm=24.0, reference="person")
+    p = DroneParams(max_stone_mm=0.0, pitch_deg=45, focal_35mm=24.0, reference="person")
     f = focal_px(24.0, 4000, 3000)
     z = drone.solve_person_distance((2000, 800), (2000, 830), f, 2000, 1500, 45, 1.75)
     pv = preview_drone((3000, 4000), p, (2000, 800), (2000, 830), (500, 900, 3500, 2800))
@@ -371,3 +371,38 @@ def test_estimate_below_limit_is_continuous_with_measured_curve():
     assert p50 < d_min and not np.isnan(p50)                 # lies below the limit...
     assert np.isnan(est["D"]["D50"]) == (p50 < est["floor_mm"])   # ...and is only quoted above the floor
     assert np.isnan(rr_anchored_percentile(est["fit"], 100 * u + 1, d_min, u))   # above u: not below the limit
+
+
+# ---------------------------------------------------------------- shadows + size cap
+def test_shadow_labels_catches_cast_shadow_not_dark_rock_in_shadow():
+    rng = np.random.default_rng(0)
+    img = np.full((300, 300, 3), 130, np.uint8)
+    img[:, 150:] = 40                                          # right half: a big shadowed zone
+    labels = np.zeros((300, 300), np.int32)
+    cv2.circle(labels, (60, 150), 25, 1, -1)                   # rock in the sunny part
+    cv2.circle(labels, (110, 150), 14, 2, -1)                  # cast shadow right next to it
+    cv2.circle(labels, (230, 150), 20, 3, -1)                  # dark rock inside the shadowed zone
+    img[labels == 1] = np.clip(200 + rng.normal(0, 25, ((labels == 1).sum(), 1)), 0, 255)   # textured
+    img[labels == 2] = 25                                      # uniform and much darker than its surroundings
+    img[labels == 3] = np.clip(55 + rng.normal(0, 8, ((labels == 3).sum(), 1)), 0, 255)   # same level as the zone
+    boxes = {}
+    for lab in (1, 2, 3):
+        ys, xs = np.nonzero(labels == lab)
+        boxes[lab] = (ys.min(), ys.max() + 1, xs.min(), xs.max() + 1)
+    assert drone.shadow_labels(img, labels, boxes) == {2}
+
+
+def test_max_stone_cap_and_shadow_filter_in_pipeline():
+    img = np.full((1500, 2000, 3), 130, np.uint8)
+    p = DroneParams(max_side=2000, pitch_deg=45, focal_35mm=36.0, tile=2000, max_area_frac=0.2,
+                    max_stone_mm=3000.0)
+    roi = (100, 100, 1900, 1400)
+    circles = [(400, 400, 10), (900, 700, 20), (1400, 1100, 100)]    # the last one is ~10 m wide
+    res = analyze_drone(img, p, Stub([(x - 100, y - 100, r) for x, y, r in circles], big=False),
+                        (1500, 300), (1500, 330), roi)
+    assert len(res.grains) == 2 and res.grains["ecd_mm"].max() < 3000
+    assert any("zbyt dużych" in n for n in res.notes)
+    res2 = analyze_drone(img, DroneParams(**{**p.__dict__, "max_stone_mm": 0.0}),
+                         Stub([(x - 100, y - 100, r) for x, y, r in circles], big=False),
+                         (1500, 300), (1500, 330), roi)
+    assert len(res2.grains) == 3                                      # cap off -> kept
