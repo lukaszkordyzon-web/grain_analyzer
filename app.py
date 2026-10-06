@@ -20,7 +20,7 @@ from grain_analyzer.pipeline import (REFERENCES, DroneParams, Params, analyze,  
                                      segment_drone, working_side_for)
 from grain_analyzer.scale import ARUCO_DICTS  # noqa: E402
 from grain_analyzer.segmentation import available_segmenters, make_segmenter  # noqa: E402
-from grain_analyzer.stats import WEIGHTINGS  # noqa: E402
+from grain_analyzer.stats import WEIGHTINGS, rr_x50  # noqa: E402
 from grain_analyzer.viz import depth_preview, draw_overlay, plot_histogram, plot_psd  # noqa: E402
 
 st.set_page_config(page_title="Analiza ziaren", layout="wide")
@@ -104,23 +104,24 @@ def results_view(res, label, wt, bins):
     def d_text(k, v):
         if not est:
             return f"{v:.1f} mm"
-        if not np.isfinite(v):
-            return f"< {est['floor_mm']:.0f} mm"
-        alt = est["D_alt"][k]
-        return f"{v:.0f}–{alt:.0f} mm" if np.isfinite(alt) and abs(alt - v) > 0.03 * v else f"{v:.0f} mm"
+        return f"{v:.0f} mm" if np.isfinite(v) else f"< {est['floor_mm']:.0f} mm"
 
     for col, (k, v) in zip(c[1:4], heads.items()):
         col.metric(k + (" (szacunek)" if est else ""), d_text(k, v))
     c[4].metric("Skala (mediana)", f"{res.scale.mm_per_px:.3f} mm/px", res.scale.method,
                 delta_color="off")
     if est:
+        lo = est["D_low"]
+        extreme = ", ".join(f"{k} ≥ {v:.0f} mm" for k, v in lo.items() if np.isfinite(v)
+                            and abs(v - est["D"][k]) > 0.03 * v)
         st.caption("D10/D50/D90 to **szacunek dla całej powierzchni hałdy**, w tym drobnicy, której nie "
-                   f"widać na zdjęciu. Rosin–Rammler jest dopasowany tylko do wiarygodnej części krzywej "
+                   "widać na zdjęciu: rozkład Rosina–Rammlera dopasowany do wiarygodnej części krzywej "
                    f"(kamienie ≥ {est['reliable_mm'] / 10 if est['reliable_mm'] else res.min_size_mm / 10:.0f} cm; "
-                   f"R² = {est['fit']['r2']:.2f}). **Podany jest zakres dwóch scenariuszy:** niższa wartość "
-                   "to „niezmierzone = drobnica poniżej progu”, wyższa to „tuż nad progiem brakuje wykrytych "
-                   f"kamieni”. Wartości poniżej {est['floor_mm']:.0f} mm nie są podawane (zbyt daleka "
-                   "ekstrapolacja). Dane same nie rozstrzygają, który scenariusz jest prawdziwy.")
+                   f"R² = {est['fit']['r2']:.2f}) i przedłużony w dół. Zakłada, że rozkład ma kształt "
+                   "Rosina–Rammlera w całym zakresie, więc kamienie, których brakuje tuż nad progiem, "
+                   "są niewykryte, a nie drobniejsze."
+                   + (f" W skrajnym przypadku (całe niezmierzone to sama drobnica): {extreme}." if extreme else "")
+                   + f" Wartości poniżej {est['floor_mm']:.0f} mm nie są podawane (zbyt daleka ekstrapolacja).")
     if res.n_rejected_depth:
         st.caption(f"Odrzucono wg głębi: {res.n_rejected_depth}")
     for n in res.notes:
@@ -131,6 +132,21 @@ def results_view(res, label, wt, bins):
         st.dataframe(pd.DataFrame({"Frakcja": [r["label"] for r in res.fractions],
                                    "Udział powierzchni": [f"{r['fraction']:.0%}" for r in res.fractions]}
                                   ).set_index("Frakcja"), width="content")
+    if est:
+        import pandas as pd
+        f = est["fit"]
+        with st.expander("Parametry rozkładu Rosina–Rammlera (do kalibracji modelu odpału)"):
+            st.dataframe(pd.DataFrame({
+                "Parametr": ["x_c — rozmiar charakterystyczny (63,2% przechodzi) [mm]",
+                             "n — wskaźnik jednorodności [–]",
+                             "X50 = x_c·(ln 2)^(1/n) [mm]",
+                             "R² dopasowania", "dopasowano do kamieni ≥ [cm]", "liczba punktów"],
+                "Wartość": [f"{f['xc']:.0f}", f"{f['n']:.2f}", f"{rr_x50(f):.0f}", f"{f['r2']:.3f}",
+                            f"{(est['reliable_mm'] or res.min_size_mm) / 10:.0f}", f"{f['n_points']}"]}
+            ).set_index("Parametr"), width="content")
+            st.caption("Parametry dotyczą **powierzchni** hałdy widocznej ze zdjęcia, więc X50 bywa zawyżone "
+                       "(grubsze kamienie na wierzchu, drobniejsze ukryte). n jest wrażliwe na zakres "
+                       "dopasowania i wybór modelu segmentacji.")
     if res.bounds:
         import pandas as pd
         with st.expander("Szczegóły: zmierzone kamienie i granice niepewności", expanded=not est):
@@ -146,8 +162,8 @@ def results_view(res, label, wt, bins):
             table = {"D": list(d_lo), "dolna granica [mm]": [f"{v:.0f}" for v in d_lo.values()],
                      "górna granica [mm]": [_fmt(d_up[k], res.min_size_mm) for k in d_lo]}
             if est:
-                table["szacunek: niezmierzone = drobnica [mm]"] = [_fmt(est["D"][k], est["floor_mm"]) for k in d_lo]
-                table["szacunek: brakujące kamienie [mm]"] = [_fmt(est["D_alt"][k], est["floor_mm"]) for k in d_lo]
+                table["szacunek (Rosin–Rammler) [mm]"] = [_fmt(est["D"][k], est["floor_mm"]) for k in d_lo]
+                table["skrajnie: sama drobnica [mm]"] = [_fmt(est["D_low"][k], est["floor_mm"]) for k in d_lo]
             st.dataframe(pd.DataFrame(table).set_index("D"), width="content")
 
     t1, t2, t3 = st.tabs(["Kontury", "Krzywa uziarnienia", "Dane"])

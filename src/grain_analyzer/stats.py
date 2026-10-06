@@ -123,6 +123,11 @@ def rr_percentile(fit: dict, p: float) -> float:
     return float(fit["xc"] * (-np.log(1 - p / 100)) ** (1 / fit["n"]))
 
 
+def rr_x50(fit: dict) -> float:
+    """Median size X50 of a Rosin-Rammler distribution: xc * (ln 2)^(1/n)."""
+    return float(fit["xc"] * np.log(2) ** (1 / fit["n"]))
+
+
 def rr_anchored_passing(fit: dict, d, d_min: float, u: float) -> np.ndarray:
     """Passing curve BELOW the measurement limit, anchored in what was measured: ``u`` (share
     of the surface that is smaller than ``d_min``) is a fact; the Rosin-Rammler shape only
@@ -144,17 +149,16 @@ MAX_EXTRAPOLATION = 5.0       # estimates further than this factor below the lim
 
 
 def estimate_fines(bounds: dict, min_r2: float = 0.9, reliable_mm: float | None = None) -> dict | None:
-    """Estimate of the whole-surface curve BELOW the measurement limit, as two scenarios.
+    """Whole-surface curve BELOW the measurement limit from a Rosin-Rammler fit.
 
-    Rosin-Rammler is fitted only on the RELIABLE part of the curve (sizes >= ``reliable_mm``:
-    detection there is complete), where "passing" = 1 - share of the surface covered by larger
-    stones. Below it the data cannot tell two things apart, so both are given:
-      * D     - everything unmeasured is fines smaller than the limit: the RR shape is rescaled to
-                the measured unmeasured share u (never claims more than was measured),
-      * D_alt - stones are MISSED just above the limit: the plain RR curve continues downwards
-                (so the plateau of the measured curve is missed stones).
-    D <= D_alt; the truth lies between them. Estimates further than 5x below the limit are not
-    quoted (NaN). Returns None when no sensible fit exists."""
+    The fit uses only the RELIABLE part (sizes >= ``reliable_mm``, where detection is complete);
+    there "passing" = 1 - share of the surface covered by larger stones. The fitted curve is then
+    continued downwards: that is the main estimate ("D"). A stone count that is lower than the
+    curve in the zone just above the limit means stones were missed there.
+    One hard constraint comes from the measurement: the share of the surface below the limit cannot
+    exceed the unmeasured share ``u``. If the fit violates it, the curve is capped
+    (``u * F(d) / F(limit)``). "D_low" is the extreme case "everything unmeasured is fines".
+    Sizes further than 5x below the limit are not quoted (NaN). None if there is no sensible fit."""
     sizes, upper = np.asarray(bounds["sizes"], float), np.asarray(bounds["upper"], float)
     fit = None
     if reliable_mm:
@@ -167,18 +171,31 @@ def estimate_fines(bounds: dict, min_r2: float = 0.9, reliable_mm: float | None 
         return None
     d_min, u = float(sizes[0]), bounds["unmeasured_fraction"]
     floor = d_min / MAX_EXTRAPOLATION                  # lowest size we are willing to quote
-    D, D_alt = {}, {}
+    D, D_low = {}, {}
     for p in (10, 50, 90):
-        measured = bounds["D_upper"][f"D{p}"]          # reachable on the measured part: use it
-        if np.isfinite(measured):
-            v = alt = measured
-        else:
-            v = rr_anchored_percentile(fit, p, d_min, u)
-            alt = rr_percentile(fit, p)
-        D[f"D{p}"] = v if v >= floor else float("nan")     # NaN = out of reach
-        D_alt[f"D{p}"] = alt if alt >= floor else float("nan")
-    return {"fit": fit, "D": D, "D_alt": D_alt, "floor_mm": floor, "fit_on": used,
+        d_up = bounds["D_upper"][f"D{p}"]              # "all unmeasured = fines" curve
+        cap = d_up if np.isfinite(d_up) else rr_anchored_percentile(fit, p, d_min, u)
+        if np.isfinite(d_up) and (not reliable_mm or d_up >= reliable_mm):
+            main = d_up                                # on the reliable part: just the measurement
+        else:                                          # plain RR, but never above what was measured
+            main = max(rr_percentile(fit, p), cap)
+        D[f"D{p}"] = main if main >= floor else float("nan")        # NaN = out of reach
+        D_low[f"D{p}"] = cap if cap >= floor else float("nan")
+    return {"fit": fit, "D": D, "D_low": D_low, "floor_mm": floor, "fit_on": used,
             "reliable_mm": reliable_mm}
+
+
+def rr_main_passing(est: dict, d, bounds: dict) -> np.ndarray:
+    """Main estimated passing curve (%) for sizes ``d`` below the reliable limit: the fitted
+    Rosin-Rammler curve, never above what was measured. Measured ceiling: the "unmeasured =
+    fines" curve above the limit, and ``u * F(d) / F(limit)`` below it - both meet at the limit."""
+    d = np.asarray(d, float)
+    sizes, upper = np.asarray(bounds["sizes"], float), np.asarray(bounds["upper"], float)
+    d_min, u = float(sizes[0]), bounds["unmeasured_fraction"]
+    rr = rr_passing(est["fit"], d)
+    ceiling = np.where(d < d_min, rr_anchored_passing(est["fit"], d, d_min, u),
+                       np.interp(d, sizes, upper))
+    return np.minimum(rr, ceiling)
 
 
 def completeness_limit(sizes_mm, min_size_mm: float, fallback_factor: float = 1.7,

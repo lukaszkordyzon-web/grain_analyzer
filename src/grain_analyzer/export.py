@@ -21,7 +21,9 @@ def summary_csv(result, size_label: str, weighting: str) -> bytes:
     if result.estimate is not None:
         for k, v in result.estimate["D"].items():
             rows[f"{k}_estimate_RR"] = v          # extrapolated, not measured
+        from .stats import rr_x50
         rows["RR_xc_mm"], rows["RR_n"] = result.estimate["fit"]["xc"], result.estimate["fit"]["n"]
+        rows["RR_X50_mm"] = rr_x50(result.estimate["fit"])
         rows["RR_r2"] = result.estimate["fit"]["r2"]
     for r in result.fractions or []:
         rows["fraction: " + r["label"]] = r["fraction"]

@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
 from .stats import (cumulative_passing, histogram, passing_curve_percentiles,  # noqa: E402
-                    rr_anchored_passing, rr_passing)
+                    rr_anchored_passing, rr_main_passing)
 
 
 def size_colors(sizes: np.ndarray, lo: float | None = None, hi: float | None = None):
@@ -141,16 +141,17 @@ def plot_psd(result, label: str, log_x: bool = True):
         ax.plot(xs, low, color=_SERIES, lw=1, alpha=0.45,
                 label="Dolna granica (niezmierzone = szczeliny/cień)")
         ax.fill_between(xs, low, up, color=_SERIES, alpha=0.10, lw=0)
-        if est is not None:                       # continue the same curve below the limit
-            fit = est["fit"]
+        if est is not None:                       # continue the curve below the limit
             x_left = est["floor_mm"]
-            grid = np.geomspace(x_left, xs[0], 80)
-            ax.plot(grid, rr_anchored_passing(fit, grid, xs[0], b["unmeasured_fraction"]),
-                    color=_EST, lw=2, label="Niezmierzone = drobnica (kształt Rosina–Rammlera)")
-            grid2 = np.geomspace(x_left, est["reliable_mm"] or xs[0], 80)
-            ax.plot(grid2, rr_passing(fit, grid2), color=_EST, lw=1.6, ls=(0, (4, 3)),
-                    label="Brakujące kamienie: czysty Rosin–Rammler z części wiarygodnej")
-            ax.axvspan(x_left, xs[0], color=_MUTED, alpha=0.08, lw=0)
+            d_min, u = xs[0], b["unmeasured_fraction"]
+            top = est["reliable_mm"] or d_min
+            grid = np.geomspace(x_left, top, 160)
+            ax.plot(grid, rr_main_passing(est, grid, b), color=_EST, lw=2.2,
+                    label="Rosin–Rammler (z części wiarygodnej), przedłużony w dół")
+            low_grid = np.geomspace(x_left, d_min, 80)
+            ax.plot(low_grid, rr_anchored_passing(est["fit"], low_grid, d_min, u), color=_EST, lw=1.2,
+                    ls=(0, (1, 2)), label="Skrajnie: całe niezmierzone = drobnica")
+            ax.axvspan(x_left, d_min, color=_MUTED, alpha=0.08, lw=0)
         marks = est["D"] if est is not None else b["D_upper"]
         mark_x0 = xs[0]
     else:
@@ -170,11 +171,8 @@ def plot_psd(result, label: str, log_x: bool = True):
         ax.axhline(p, color=_MUTED, lw=0.6, alpha=0.6)
         if np.isfinite(val):
             ax.plot([val], [p], "o", ms=6, color=_EST if val < mark_x0 else _SERIES, mec="none")
-            alt = est["D_alt"][name] if (est is not None and val < mark_x0) else None
-            txt = (f"{name} = {val:.0f}–{alt:.0f} mm (szac.)" if alt is not None and np.isfinite(alt)
-                   and abs(alt - val) > 0.03 * val else
-                   f"{name} = {val:.0f} mm" + (" (szac.)" if val < mark_x0 else ""))
-            ax.annotate(txt, (val, p), xytext=(6, -12), textcoords="offset points", color=_INK, fontsize=9)
+            ax.annotate(f"{name} = {val:.0f} mm" + (" (szac.)" if val < mark_x0 else ""), (val, p),
+                        xytext=(6, -12), textcoords="offset points", color=_INK, fontsize=9)
     x_min = min(v for v in (x_left, xs.min()) if v is not None)
     if log_x:
         ax.set_xscale("log")
