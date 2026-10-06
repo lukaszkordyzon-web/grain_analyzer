@@ -465,7 +465,7 @@ else:
     # ---- click-to-mark -------------------------------------------------------------
     up_id = (upload.name, upload.size)
     if st.session_state.get("up_id") != up_id:     # another photo: its own points; heavy cache dropped
-        st.session_state.update(up_id=up_id, last_click=None, _next_step=0)
+        st.session_state.update(up_id=up_id, _next_step=0)
         st.session_state.pop("seg_cache", None)
     pts = st.session_state.setdefault("pts_by", {}).setdefault(up_id, {})
     ROI_STEPS = [("roi0", "Obszar hałdy: lewy górny róg"), ("roi1", "Obszar hałdy: prawy dolny róg")]
@@ -502,9 +502,13 @@ else:
         cv2.rectangle(prev, tuple(int(v * sc) for v in pts["roi0"]),
                       tuple(int(v * sc) for v in pts["roi1"]), (255, 160, 0), 2)
 
-    click = streamlit_image_coordinates(Image.fromarray(prev), key="img_click", width=DW)
-    if click and (click["x"], click["y"]) != st.session_state.last_click:
-        st.session_state.last_click = (click["x"], click["y"])
+    # one click widget and one "last click" per photo: otherwise the previous photo's last click
+    # comes back as a "new" click after switching and moves a point
+    click = streamlit_image_coordinates(Image.fromarray(prev), key=f"img_click_{upload.name}_{upload.size}",
+                                        width=DW)
+    last_clicks = st.session_state.setdefault("last_click_by", {})
+    if click and (click["x"], click["y"]) != last_clicks.get(up_id):
+        last_clicks[up_id] = (click["x"], click["y"])
         pts[STEPS[step][0]] = (click["x"] / sc, click["y"] / sc)
         if step < len(STEPS) - 1:
             st.session_state._next_step = step + 1
