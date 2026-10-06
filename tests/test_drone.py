@@ -443,3 +443,9 @@ def test_main_curve_never_exceeds_what_was_measured():
     assert main[below].max() <= 100 * u + 1e-9                             # below it: never more than u
     assert (np.diff(main) >= -1e-9).all()                                  # still a passing curve (monotonic)
     assert est["D_low"]["D50"] <= est["D"]["D50"] or np.isnan(est["D"]["D50"])
+
+
+def test_rr_x50_matches_percentile_and_is_exported():
+    from grain_analyzer.stats import rr_percentile, rr_x50
+    fit = {"xc": 240.0, "n": 0.95}
+    assert rr_x50(fit) == pytest.approx(rr_percentile(fit, 50))

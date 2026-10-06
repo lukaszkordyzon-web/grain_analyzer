@@ -20,7 +20,7 @@ from grain_analyzer.pipeline import (REFERENCES, DroneParams, Params, analyze,  
                                      segment_drone, working_side_for)
 from grain_analyzer.scale import ARUCO_DICTS  # noqa: E402
 from grain_analyzer.segmentation import available_segmenters, make_segmenter  # noqa: E402
-from grain_analyzer.stats import WEIGHTINGS  # noqa: E402
+from grain_analyzer.stats import WEIGHTINGS, rr_x50  # noqa: E402
 from grain_analyzer.viz import depth_preview, draw_overlay, plot_histogram, plot_psd  # noqa: E402
 
 st.set_page_config(page_title="Analiza ziaren", layout="wide")
@@ -132,6 +132,21 @@ def results_view(res, label, wt, bins):
         st.dataframe(pd.DataFrame({"Frakcja": [r["label"] for r in res.fractions],
                                    "Udział powierzchni": [f"{r['fraction']:.0%}" for r in res.fractions]}
                                   ).set_index("Frakcja"), width="content")
+    if est:
+        import pandas as pd
+        f = est["fit"]
+        with st.expander("Parametry rozkładu Rosina–Rammlera (do kalibracji modelu odpału)"):
+            st.dataframe(pd.DataFrame({
+                "Parametr": ["x_c — rozmiar charakterystyczny (63,2% przechodzi) [mm]",
+                             "n — wskaźnik jednorodności [–]",
+                             "X50 = x_c·(ln 2)^(1/n) [mm]",
+                             "R² dopasowania", "dopasowano do kamieni ≥ [cm]", "liczba punktów"],
+                "Wartość": [f"{f['xc']:.0f}", f"{f['n']:.2f}", f"{rr_x50(f):.0f}", f"{f['r2']:.3f}",
+                            f"{(est['reliable_mm'] or res.min_size_mm) / 10:.0f}", f"{f['n_points']}"]}
+            ).set_index("Parametr"), width="content")
+            st.caption("Parametry dotyczą **powierzchni** hałdy widocznej ze zdjęcia, więc X50 bywa zawyżone "
+                       "(grubsze kamienie na wierzchu, drobniejsze ukryte). n jest wrażliwe na zakres "
+                       "dopasowania i wybór modelu segmentacji.")
     if res.bounds:
         import pandas as pd
         with st.expander("Szczegóły: zmierzone kamienie i granice niepewności", expanded=not est):

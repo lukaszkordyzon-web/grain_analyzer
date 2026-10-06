@@ -123,6 +123,11 @@ def rr_percentile(fit: dict, p: float) -> float:
     return float(fit["xc"] * (-np.log(1 - p / 100)) ** (1 / fit["n"]))
 
 
+def rr_x50(fit: dict) -> float:
+    """Median size X50 of a Rosin-Rammler distribution: xc * (ln 2)^(1/n)."""
+    return float(fit["xc"] * np.log(2) ** (1 / fit["n"]))
+
+
 def rr_anchored_passing(fit: dict, d, d_min: float, u: float) -> np.ndarray:
     """Passing curve BELOW the measurement limit, anchored in what was measured: ``u`` (share
     of the surface that is smaller than ``d_min``) is a fact; the Rosin-Rammler shape only
