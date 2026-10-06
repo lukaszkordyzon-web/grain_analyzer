@@ -126,7 +126,12 @@ def kuzram_panel(est, res):
         CCL = c3.number_input("Ładunek kolumnowy CCL [m]", 0.0, 60.0, 0.0, 0.1, key="kr_CCL")
         A = c3.number_input("Współczynnik skały A (przyjęty)", 0.0, 30.0, 0.0, 0.1, key="kr_A",
                             help="Z opisu górotworu; 0 = nie podano (wtedy policzę tylko A zmierzone).")
-        out = calibrate(BlastInputs(B, S, D, H, Q, E, W, BCL, CCL, A), x50_mm, n_meas)
+        inputs = BlastInputs(B, S, D, H, Q, E, W, BCL, CCL, A)
+        out = calibrate(inputs, x50_mm, n_meas)
+        # X50 below the measurement limit is an extrapolation: also show the extreme scenario
+        # "everything unmeasured is fines" (smaller X50 -> smaller A)
+        d50_low = est["D_low"]["D50"] if est else float("nan")
+        out_low = calibrate(inputs, d50_low, None) if np.isfinite(d50_low) else None
 
         def f(v, fmt="{:.2f}"):
             return fmt.format(v) if v is not None else "—"
@@ -137,8 +142,12 @@ def kuzram_panel(est, res):
                 ("X50 z modelu [cm]", f(out["X50_model_cm"], "{:.1f}")),
                 ("n z modelu", f(out["n_model"])),
                 ("A zmierzone (wsteczne) [–]", f(out["A_measured"])),
+                ("A zmierzone — skrajnie (niezmierzone = sama drobnica) [–]",
+                 f(out_low["A_measured"]) if out_low else "—"),
                 ("A przyjęte [–]", f(out["A_assumed"])),
-                ("ka", f(out["ka"])), ("kn", f(out["kn"]))]
+                ("ka", f(out["ka"])),
+                ("ka — skrajnie", f(out_low["ka"]) if out_low else "—"),
+                ("kn", f(out["kn"]))]
         table = pd.DataFrame(rows, columns=["Wielkość", "Wartość"]).set_index("Wielkość")
         st.dataframe(table, width="content")
         if out["ka"] is None and out["kn"] is None:
@@ -147,6 +156,12 @@ def kuzram_panel(est, res):
         if est and x50_mm < est["floor_mm"]:
             st.warning(f"X50 z dopasowania ({x50_mm:.0f} mm) leży poniżej zasięgu wiarygodnej ekstrapolacji "
                        f"({est['floor_mm']:.0f} mm): ka jest niepewne.")
+        if out["ka"] is not None and 0 < A < 3:
+            st.caption(f"ka zależy wprost od wpisanego A (tu {A:.1f}): wpisz współczynnik skały z opisu "
+                       "górotworu, inaczej ka nie ma sensu. Samo A zmierzone nie zależy od tego pola.")
+        if W == 0:
+            st.caption("W = 0 oznacza idealne wiercenie. W praktyce błąd 0,1–0,3 m obniża n z modelu, "
+                       "a więc podnosi kn.")
         st.caption("Uwaga: zdjęcie pokazuje powierzchnię hałdy, więc X50 bywa zawyżone, a n jest wrażliwe na "
                    "zakres dopasowania i model segmentacji. Współczynniki z jednego odpału są orientacyjne; "
                    "rzetelniejsza kalibracja wymaga kilkunastu odpałów w tych samych warunkach.")
