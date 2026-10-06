@@ -176,3 +176,28 @@ def test_psd_plot_keeps_the_axis_label_and_marks_estimates_orange():
     assert d50 < 400.0                                        # an estimate inside the unreliable zone
     dot = [ln for ln in ax.lines if ln.get_marker() == "o" and abs(ln.get_xdata()[0] - d50) < 1e-6][0]
     assert dot.get_color() == "#e8743b"                       # estimates are orange, not blue
+
+
+def test_fastsam_adapter_lifts_the_300_detection_cap():
+    """ultralytics keeps only max_det=300 detections per image by default: the adapter must raise it,
+    otherwise small stones in a dense pile are silently dropped (observed on a real tile)."""
+    import torch
+    from grain_analyzer.segmentation import SEGMENTERS, UltralyticsSegmenter
+
+    seen = {}
+
+    class R:
+        masks = type("M", (), {"data": torch.zeros((2, 16, 16), dtype=torch.bool)})()
+        boxes = type("B", (), {"conf": torch.tensor([0.9, 0.8])})()
+
+    class FakeModel:
+        def __call__(self, img, **kw):
+            seen.update(kw)
+            return [R()]
+
+    seg = UltralyticsSegmenter("FastSAM-s.pt", "fastsam")
+    seg._model = FakeModel()
+    out = seg.segment(np.zeros((16, 16, 3), np.uint8))
+    assert len(out) == 2 and seen["max_det"] >= 1000 and seen["retina_masks"] is True
+    spec = SEGMENTERS["fastsam"]
+    assert spec.tile < 1024 and spec.max_tiles > SEGMENTERS["sam-b"].max_tiles
