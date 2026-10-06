@@ -143,23 +143,42 @@ def rr_anchored_percentile(fit: dict, p: float, d_min: float, u: float) -> float
 MAX_EXTRAPOLATION = 5.0       # estimates further than this factor below the limit are not given
 
 
-def estimate_fines(bounds: dict, min_r2: float = 0.9) -> dict | None:
-    """Whole-surface estimate: Rosin-Rammler fitted to the *upper* passing curve (unmeasured
-    area counted as fines) and extrapolated below the measurement limit. An estimate, not
-    a measurement - it assumes voids/shadow are a minor part of the unmeasured area and
-    that the size distribution is Rosin-Rammler shaped."""
-    fit = rosin_rammler_fit(bounds["sizes"], bounds["upper"])
+def estimate_fines(bounds: dict, min_r2: float = 0.9, reliable_mm: float | None = None) -> dict | None:
+    """Estimate of the whole-surface curve BELOW the measurement limit, as two scenarios.
+
+    Rosin-Rammler is fitted only on the RELIABLE part of the curve (sizes >= ``reliable_mm``:
+    detection there is complete), where "passing" = 1 - share of the surface covered by larger
+    stones. Below it the data cannot tell two things apart, so both are given:
+      * D     - everything unmeasured is fines smaller than the limit: the RR shape is rescaled to
+                the measured unmeasured share u (never claims more than was measured),
+      * D_alt - stones are MISSED just above the limit: the plain RR curve continues downwards
+                (so the plateau of the measured curve is missed stones).
+    D <= D_alt; the truth lies between them. Estimates further than 5x below the limit are not
+    quoted (NaN). Returns None when no sensible fit exists."""
+    sizes, upper = np.asarray(bounds["sizes"], float), np.asarray(bounds["upper"], float)
+    fit = None
+    if reliable_mm:
+        keep = sizes >= reliable_mm
+        fit = rosin_rammler_fit(sizes[keep], upper[keep])
+    used = "reliable" if fit is not None else "all"
+    if fit is None:
+        fit = rosin_rammler_fit(sizes, upper)
     if fit is None or fit["r2"] < min_r2:
         return None
-    floor = float(bounds["sizes"][0]) / MAX_EXTRAPOLATION    # lowest size we are willing to quote
-    d = {}
+    d_min, u = float(sizes[0]), bounds["unmeasured_fraction"]
+    floor = d_min / MAX_EXTRAPOLATION                  # lowest size we are willing to quote
+    D, D_alt = {}, {}
     for p in (10, 50, 90):
         measured = bounds["D_upper"][f"D{p}"]          # reachable on the measured part: use it
-        v = (measured if np.isfinite(measured)
-             else rr_anchored_percentile(fit, p, float(bounds["sizes"][0]),
-                                         bounds["unmeasured_fraction"]))
-        d[f"D{p}"] = v if v >= floor else float("nan")   # NaN = out of reach
-    return {"fit": fit, "D": d, "floor_mm": floor}
+        if np.isfinite(measured):
+            v = alt = measured
+        else:
+            v = rr_anchored_percentile(fit, p, d_min, u)
+            alt = rr_percentile(fit, p)
+        D[f"D{p}"] = v if v >= floor else float("nan")     # NaN = out of reach
+        D_alt[f"D{p}"] = alt if alt >= floor else float("nan")
+    return {"fit": fit, "D": D, "D_alt": D_alt, "floor_mm": floor, "fit_on": used,
+            "reliable_mm": reliable_mm}
 
 
 def completeness_limit(sizes_mm, min_size_mm: float, fallback_factor: float = 1.7,

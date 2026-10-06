@@ -406,3 +406,20 @@ def test_max_stone_cap_and_shadow_filter_in_pipeline():
                          Stub([(x - 100, y - 100, r) for x, y, r in circles], big=False),
                          (1500, 300), (1500, 330), roi)
     assert len(res2.grains) == 3                                      # cap off -> kept
+
+
+def test_fit_uses_reliable_part_and_gives_two_scenarios():
+    """With a detection plateau just above the limit, fitting everything distorts the shape;
+    fitting only the reliable part recovers it, and the two scenarios bracket the truth."""
+    from grain_analyzer.stats import estimate_fines, passing_bounds, rr_percentile
+    d, a = _rr_scene(xc=240.0, n=0.95, d_min=100.0)
+    a = a * np.clip((d - 100) / 300, 0, 1).clip(0.0, 1.0) ** 1 * (d < 400) + a * (d >= 400)   # leaky below 400
+    b = passing_bounds(d, a, 1.0, 100.0)
+    truth = {k: rr_percentile({"xc": 240.0, "n": 0.95}, k) for k in (10, 50, 90)}
+    est = estimate_fines(b, reliable_mm=400.0)
+    assert est["fit_on"] == "reliable"
+    assert est["fit"]["n"] == pytest.approx(0.95, rel=0.12)
+    assert est["D_alt"]["D50"] == pytest.approx(truth[50], rel=0.15)      # plain RR from the reliable part
+    assert est["D"]["D50"] < est["D_alt"]["D50"]                            # "all unmeasured is fines" is lower
+    est_all = estimate_fines(b)                                              # old behaviour: fit on everything
+    assert abs(est_all["fit"]["n"] - 0.95) > abs(est["fit"]["n"] - 0.95)     # the plateau distorted it
