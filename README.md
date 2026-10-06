@@ -41,6 +41,13 @@ same z GitHuba do `~/.cache/grain_analyzer/weights` (`GRAIN_WEIGHTS_DIR`). **SAM
 **SAM 3** (wagi wymagają zgody na Hugging Face; ustaw `GRAIN_SAM3_WEIGHTS`) są w kodzie, ale
 **nieprzetestowane** — oznaczone w menu. Wyniki porównania na jednym kafelku: patrz opis zmian.
 
+## Kalibracja modelu odpału (Kuz-Ram)
+W wynikach trybu „Dron” (gdy da się dopasować Rosina–Rammlera) jest panel **ka i kn**. Wpisujesz dane odpału
+(D, B, S, H, W, Q, BCL, CCL, siła MW, przyjęte A); aplikacja liczy predykcję Kuz-Ram (X50, n, K) i porównuje ją
+z rozkładem zmierzonym ze zdjęcia: **ka = A zmierzone / A przyjęte**, **kn = n zmierzone / n z modelu**.
+Wzory (Cunningham) są w `src/grain_analyzer/blast.py` — zweryfikuj je z normą u siebie. Zdjęcie pokazuje powierzchnię
+hałdy, więc X50 bywa zawyżone, a n jest wrażliwe; współczynniki z jednego odpału są orientacyjne.
+
 ## Tryb „Dron” (hałdy urobku, zdjęcia ukośne)
 Cała hałda na jednym zdjęciu (np. DJI Matrice 3D/4D). Skala musi wynikać z czegoś o znanym
 rozmiarze w kadrze — do wyboru w panelu:

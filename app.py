@@ -92,6 +92,58 @@ def _fmt(v, floor):
     return f"< {floor:.0f}" if not np.isfinite(v) else f"{v:.0f}"
 
 
+def kuzram_panel(est):
+    """Calibration of the Kuz-Ram model: correction factors ka (rock factor) and kn (uniformity index)."""
+    import pandas as pd
+    from grain_analyzer.blast import BlastInputs, calibrate
+
+    fit = est["fit"]
+    x50_mm, n_meas = rr_x50(fit), fit["n"]
+    with st.expander("Kalibracja modelu odpału Kuz-Ram: współczynniki ka i kn"):
+        st.caption("Wpisz dane odpału, którego dotyczy zdjęcie. Aplikacja policzy, co przewiduje model "
+                   "Kuz-Ram, i porówna z rozkładem Rosina–Rammlera zmierzonym ze zdjęcia: "
+                   "**ka = A zmierzone / A przyjęte**, **kn = n zmierzone / n z modelu**. "
+                   "Wzory są z literatury (Cunningham); zweryfikuj je z normą u siebie.")
+        c1, c2, c3 = st.columns(3)
+        D = c1.number_input("Średnica otworu D [mm]", 0.0, 500.0, 0.0, 1.0, key="kr_D")
+        B = c1.number_input("Nadkład B [m]", 0.0, 20.0, 0.0, 0.1, key="kr_B")
+        S = c1.number_input("Rozstaw S [m]", 0.0, 20.0, 0.0, 0.1, key="kr_S")
+        H = c2.number_input("Wysokość ławy H [m]", 0.0, 60.0, 0.0, 0.5, key="kr_H")
+        W = c2.number_input("Błąd wiercenia W (odch. std.) [m]", 0.0, 5.0, 0.0, 0.05, key="kr_W")
+        Q = c2.number_input("Ładunek na otwór Q [kg]", 0.0, 5000.0, 0.0, 1.0, key="kr_Q")
+        E = c3.number_input("Siła względna MW (ANFO = 100)", 1.0, 300.0, 100.0, 1.0, key="kr_E")
+        BCL = c3.number_input("Ładunek denny BCL [m]", 0.0, 60.0, 0.0, 0.1, key="kr_BCL")
+        CCL = c3.number_input("Ładunek kolumnowy CCL [m]", 0.0, 60.0, 0.0, 0.1, key="kr_CCL")
+        A = c3.number_input("Współczynnik skały A (przyjęty)", 0.0, 30.0, 0.0, 0.1, key="kr_A",
+                            help="Z opisu górotworu; 0 = nie podano (wtedy policzę tylko A zmierzone).")
+        out = calibrate(BlastInputs(B, S, D, H, Q, E, W, BCL, CCL, A), x50_mm, n_meas)
+
+        def f(v, fmt="{:.2f}"):
+            return fmt.format(v) if v is not None else "—"
+
+        rows = [("X50 zmierzone (dopasowanie Rosina–Rammlera) [cm]", f(x50_mm / 10, "{:.1f}")),
+                ("n zmierzone (dopasowanie)", f(n_meas)),
+                ("Współczynnik ładowania K [kg/m³]", f(out["K"])),
+                ("X50 z modelu [cm]", f(out["X50_model_cm"], "{:.1f}")),
+                ("n z modelu", f(out["n_model"])),
+                ("A zmierzone (wsteczne) [–]", f(out["A_measured"])),
+                ("A przyjęte [–]", f(out["A_assumed"])),
+                ("ka", f(out["ka"])), ("kn", f(out["kn"]))]
+        table = pd.DataFrame(rows, columns=["Wielkość", "Wartość"]).set_index("Wielkość")
+        st.dataframe(table, width="content")
+        if out["ka"] is None and out["kn"] is None:
+            st.info("Uzupełnij dane odpału (co najmniej D, B, S, H, Q oraz ładunki BCL/CCL dla kn; "
+                    "dla ka także współczynnik A).")
+        if x50_mm < est["floor_mm"]:
+            st.warning(f"X50 z dopasowania ({x50_mm:.0f} mm) leży poniżej zasięgu wiarygodnej ekstrapolacji "
+                       f"({est['floor_mm']:.0f} mm): ka jest niepewne.")
+        st.caption("Uwaga: zdjęcie pokazuje powierzchnię hałdy, więc X50 bywa zawyżone, a n jest wrażliwe na "
+                   "zakres dopasowania i model segmentacji. Współczynniki z jednego odpału są orientacyjne; "
+                   "rzetelniejsza kalibracja wymaga kilkunastu odpałów w tych samych warunkach.")
+        st.download_button("Pobierz kalibrację (CSV)", table.to_csv().encode("utf-8-sig"),
+                           "kalibracja_kuzram.csv", "text/csv")
+
+
 def results_view(res, label, wt, bins):
     if res.grains.empty:
         st.warning("Nie wykryto ziaren — zmniejsz minimalny rozmiar lub zmień ustawienia.")
@@ -147,6 +199,8 @@ def results_view(res, label, wt, bins):
             st.caption("Parametry dotyczą **powierzchni** hałdy widocznej ze zdjęcia, więc X50 bywa zawyżone "
                        "(grubsze kamienie na wierzchu, drobniejsze ukryte). n jest wrażliwe na zakres "
                        "dopasowania i wybór modelu segmentacji.")
+    if est:
+        kuzram_panel(est)
     if res.bounds:
         import pandas as pd
         with st.expander("Szczegóły: zmierzone kamienie i granice niepewności", expanded=not est):
