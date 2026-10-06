@@ -149,7 +149,7 @@ def kuzram_panel(est, res):
                 ("ka — skrajnie", f(out_low["ka"]) if out_low else "—"),
                 ("kn", f(out["kn"]))]
         table = pd.DataFrame(rows, columns=["Wielkość", "Wartość"]).set_index("Wielkość")
-        st.dataframe(table, width="content")
+        show_table(table)
         if out["ka"] is None and out["kn"] is None:
             st.info("Uzupełnij dane odpału (co najmniej D, B, S, H, Q oraz ładunki BCL/CCL dla kn; "
                     "dla ka także współczynnik A).")
@@ -167,6 +167,11 @@ def kuzram_panel(est, res):
                    "rzetelniejsza kalibracja wymaga kilkunastu odpałów w tych samych warunkach.")
         st.download_button("Pobierz kalibrację (CSV)", table.to_csv().encode("utf-8-sig"),
                            "kalibracja_kuzram.csv", "text/csv")
+
+
+def show_table(df):
+    """Mała tabela z jawną wysokością — automatyczna ucina ostatnie wiersze."""
+    st.dataframe(df, width="content", height=(len(df) + 1) * 35 + 3)
 
 
 def results_view(res, label, wt, bins):
@@ -206,21 +211,21 @@ def results_view(res, label, wt, bins):
     if res.fractions:
         import pandas as pd
         st.markdown("**Skład powierzchni według frakcji** (udział analizowanego obszaru)")
-        st.dataframe(pd.DataFrame({"Frakcja": [r["label"] for r in res.fractions],
+        show_table(pd.DataFrame({"Frakcja": [r["label"] for r in res.fractions],
                                    "Udział powierzchni": [f"{r['fraction']:.0%}" for r in res.fractions]}
-                                  ).set_index("Frakcja"), width="content")
+                                  ).set_index("Frakcja"))
     if est:
         import pandas as pd
         f = est["fit"]
         with st.expander("Parametry rozkładu Rosina–Rammlera (do kalibracji modelu odpału)"):
-            st.dataframe(pd.DataFrame({
+            show_table(pd.DataFrame({
                 "Parametr": ["x_c — rozmiar charakterystyczny (63,2% przechodzi) [mm]",
                              "n — wskaźnik jednorodności [–]",
                              "X50 = x_c·(ln 2)^(1/n) [mm]",
                              "R² dopasowania", "dopasowano do kamieni ≥ [cm]", "liczba punktów"],
                 "Wartość": [f"{f['xc']:.0f}", f"{f['n']:.2f}", f"{rr_x50(f):.0f}", f"{f['r2']:.3f}",
                             f"{(est['reliable_mm'] or res.min_size_mm) / 10:.0f}", f"{f['n_points']}"]}
-            ).set_index("Parametr"), width="content")
+            ).set_index("Parametr"))
             st.caption("Parametry dotyczą **powierzchni** hałdy widocznej ze zdjęcia, więc X50 bywa zawyżone "
                        "(grubsze kamienie na wierzchu, drobniejsze ukryte). n jest wrażliwe na zakres "
                        "dopasowania i wybór modelu segmentacji.")
@@ -243,7 +248,7 @@ def results_view(res, label, wt, bins):
             if est:
                 table["szacunek (Rosin–Rammler) [mm]"] = [_fmt(est["D"][k], est["floor_mm"]) for k in d_lo]
                 table["skrajnie: sama drobnica [mm]"] = [_fmt(est["D_low"][k], est["floor_mm"]) for k in d_lo]
-            st.dataframe(pd.DataFrame(table).set_index("D"), width="content")
+            show_table(pd.DataFrame(table).set_index("D"))
 
     t1, t2, t3 = st.tabs(["Kontury", "Krzywa uziarnienia", "Dane"])
     with t1:
