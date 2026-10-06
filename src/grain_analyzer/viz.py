@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
 from .stats import (cumulative_passing, histogram, passing_curve_percentiles,  # noqa: E402
-                    rr_passing, rr_percentile)
+                    rr_anchored_passing)
 
 
 def draw_overlay(result, show_ids: bool = False, thickness: int = 1) -> np.ndarray:
@@ -86,7 +86,7 @@ def plot_psd(result, label: str, log_x: bool = True):
             fit = est["fit"]
             x_left = est["floor_mm"]
             grid = np.geomspace(x_left, xs[0], 80)
-            ax.plot(np.append(grid, xs[0]), np.append(rr_passing(fit, grid), up[0]),
+            ax.plot(grid, rr_anchored_passing(fit, grid, xs[0], b["unmeasured_fraction"]),
                     color=_EST, lw=2, label="Szacunek poniżej progu (Rosin–Rammler)")
             ax.axvspan(x_left, xs[0], color=_MUTED, alpha=0.08, lw=0)
         marks = est["D"] if est is not None else b["D_upper"]

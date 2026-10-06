@@ -351,3 +351,23 @@ def test_headline_d_uses_measured_part_and_curve_is_one_basis():
     main = fig.axes[0].lines[0]                    # first line = whole-surface (upper) curve
     assert main.get_ydata()[0] == pytest.approx(b["unmeasured_fraction"] * 100)   # starts at ~80 %, not 0
     assert fig.axes[0].lines[1].get_ydata()[0] == pytest.approx(0)               # lower bound starts at 0
+
+
+def test_estimate_below_limit_is_continuous_with_measured_curve():
+    """Regression: the extrapolated part used to end ~7 points below the measured curve (a jump)."""
+    from grain_analyzer.stats import (estimate_fines, passing_bounds, rr_anchored_passing,
+                                      rr_anchored_percentile)
+    # a measured curve that is NOT Rosin-Rammler shaped near the limit (few stones just above it)
+    d = np.concatenate([np.linspace(200, 300, 5), np.linspace(300, 1500, 60)])
+    a = np.concatenate([np.full(5, 0.002), np.full(60, 0.16 / 60)])
+    b = passing_bounds(d, a, 1.0, 200.0)
+    est = estimate_fines(b, min_r2=0.0)
+    u, d_min = b["unmeasured_fraction"], b["sizes"][0]
+    grid = np.geomspace(est["floor_mm"], d_min, 50)
+    y = rr_anchored_passing(est["fit"], grid, d_min, u)
+    assert y[-1] == pytest.approx(100 * u)                  # joins the measured curve exactly
+    assert (np.diff(y) > 0).all() and y[0] < y[-1]          # monotonic, below the limit
+    p50 = rr_anchored_percentile(est["fit"], 50, d_min, u)
+    assert p50 < d_min and not np.isnan(p50)                 # lies below the limit...
+    assert np.isnan(est["D"]["D50"]) == (p50 < est["floor_mm"])   # ...and is only quoted above the floor
+    assert np.isnan(rr_anchored_percentile(est["fit"], 100 * u + 1, d_min, u))   # above u: not below the limit

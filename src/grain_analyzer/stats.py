@@ -123,6 +123,23 @@ def rr_percentile(fit: dict, p: float) -> float:
     return float(fit["xc"] * (-np.log(1 - p / 100)) ** (1 / fit["n"]))
 
 
+def rr_anchored_passing(fit: dict, d, d_min: float, u: float) -> np.ndarray:
+    """Passing curve BELOW the measurement limit, anchored in what was measured: ``u`` (share
+    of the surface that is smaller than ``d_min``) is a fact; the Rosin-Rammler shape only
+    decides how that share is spread over sizes. Continuous with the measured curve at d_min."""
+    f = lambda x: 1 - np.exp(-(np.asarray(x, float) / fit["xc"]) ** fit["n"])  # noqa: E731
+    return 100 * u * f(d) / f(d_min)
+
+
+def rr_anchored_percentile(fit: dict, p: float, d_min: float, u: float) -> float:
+    """Size below the limit at which ``p`` % of the whole surface is passed (NaN if p >= u)."""
+    if p / 100 >= u:
+        return float("nan")
+    f_min = 1 - np.exp(-(d_min / fit["xc"]) ** fit["n"])
+    target = (p / 100) / u * f_min
+    return float(fit["xc"] * (-np.log(1 - target)) ** (1 / fit["n"]))
+
+
 MAX_EXTRAPOLATION = 5.0       # estimates further than this factor below the limit are not given
 
 
@@ -138,7 +155,9 @@ def estimate_fines(bounds: dict, min_r2: float = 0.9) -> dict | None:
     d = {}
     for p in (10, 50, 90):
         measured = bounds["D_upper"][f"D{p}"]          # reachable on the measured part: use it
-        v = measured if np.isfinite(measured) else rr_percentile(fit, p)
+        v = (measured if np.isfinite(measured)
+             else rr_anchored_percentile(fit, p, float(bounds["sizes"][0]),
+                                         bounds["unmeasured_fraction"]))
         d[f"D{p}"] = v if v >= floor else float("nan")   # NaN = out of reach
     return {"fit": fit, "D": d, "floor_mm": floor}
 
