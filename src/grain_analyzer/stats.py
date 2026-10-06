@@ -162,6 +162,32 @@ def estimate_fines(bounds: dict, min_r2: float = 0.9) -> dict | None:
     return {"fit": fit, "D": d, "floor_mm": floor}
 
 
+def completeness_limit(sizes_mm, min_size_mm: float, fallback_factor: float = 1.7,
+                       min_stones: int = 40) -> tuple[float, str]:
+    """Size above which stones are detected (nearly) completely.
+
+    In a pile of broken rock the NUMBER of stones keeps growing towards smaller sizes, so where the
+    count per log-size class peaks and then falls, detection is losing stones. That turnover is the
+    completeness limit. With too few stones (or no clear peak) fall back to a fixed factor of the
+    measurement limit. Returns (limit_mm, "turnover" | "fallback")."""
+    s = np.asarray(sizes_mm, float)
+    s = s[s > 0]
+    fallback = (float(min_size_mm * fallback_factor), "fallback")
+    if len(s) < min_stones or s.max() / s.min() < 2:
+        return fallback
+    edges = np.geomspace(s.min(), s.max(), 15)
+    cnt, _ = np.histogram(s, edges)
+    sm = np.convolve(np.pad(cnt.astype(float), 1, mode="edge"), [1, 2, 1], mode="valid") / 4
+    centers = np.sqrt(edges[:-1] * edges[1:])
+    ok = edges[:-1] < np.median(s)                    # the turnover lies on the small side
+    if not ok.any():
+        return fallback
+    k = int(np.argmax(np.where(ok, sm, -1)))
+    if k == 0 or sm[k] < 3:                           # monotonic growth: no turnover visible
+        return fallback
+    return float(max(centers[k], min_size_mm * 1.15)), "turnover"
+
+
 def histogram(sizes: np.ndarray, bins: int = 20, weighting: str = "number"):
     """(counts-or-weight share %, bin edges)."""
     sizes = np.asarray(sizes, float)
