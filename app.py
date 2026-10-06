@@ -92,14 +92,24 @@ def _fmt(v, floor):
     return f"< {floor:.0f}" if not np.isfinite(v) else f"{v:.0f}"
 
 
-def kuzram_panel(est):
-    """Calibration of the Kuz-Ram model: correction factors ka (rock factor) and kn (uniformity index)."""
+def kuzram_panel(est, res):
+    """Calibration of the Kuz-Ram model: correction factors ka (rock factor) and kn (uniformity index).
+    Always shown in drone mode; without a usable Rosin-Rammler fit only the model prediction is computed."""
     import pandas as pd
     from grain_analyzer.blast import BlastInputs, calibrate
 
-    fit = est["fit"]
-    x50_mm, n_meas = rr_x50(fit), fit["n"]
-    with st.expander("Kalibracja modelu odpału Kuz-Ram: współczynniki ka i kn"):
+    fit = est["fit"] if est else None
+    x50_mm, n_meas = (rr_x50(fit), fit["n"]) if fit else (None, None)
+    with st.expander("Kalibracja modelu odpału Kuz-Ram: współczynniki ka i kn", expanded=est is None):
+        if est is None:
+            st.warning(
+                "Brak zmierzonego rozkładu Rosina–Rammlera, więc ka i kn nie da się policzyć. "
+                + ("Wybierz w panelu bocznym ważenie **powierzchniowe (d²)** i uruchom analizę ponownie."
+                   if not res.bounds else
+                   "Dopasowanie do wiarygodnej części krzywej nie było wiarygodne (R² poniżej 0,9 albo za mało "
+                   "punktów). Spróbuj zmniejszyć „Najmniejszy kamień do zmierzenia” albo zmienić model "
+                   "segmentacji.")
+                + " Możesz już teraz policzyć predykcję modelu z danych odpału.")
         st.caption("Wpisz dane odpału, którego dotyczy zdjęcie. Aplikacja policzy, co przewiduje model "
                    "Kuz-Ram, i porówna z rozkładem Rosina–Rammlera zmierzonym ze zdjęcia: "
                    "**ka = A zmierzone / A przyjęte**, **kn = n zmierzone / n z modelu**. "
@@ -121,7 +131,7 @@ def kuzram_panel(est):
         def f(v, fmt="{:.2f}"):
             return fmt.format(v) if v is not None else "—"
 
-        rows = [("X50 zmierzone (dopasowanie Rosina–Rammlera) [cm]", f(x50_mm / 10, "{:.1f}")),
+        rows = [("X50 zmierzone (dopasowanie Rosina–Rammlera) [cm]", f(x50_mm / 10 if x50_mm else None, "{:.1f}")),
                 ("n zmierzone (dopasowanie)", f(n_meas)),
                 ("Współczynnik ładowania K [kg/m³]", f(out["K"])),
                 ("X50 z modelu [cm]", f(out["X50_model_cm"], "{:.1f}")),
@@ -134,7 +144,7 @@ def kuzram_panel(est):
         if out["ka"] is None and out["kn"] is None:
             st.info("Uzupełnij dane odpału (co najmniej D, B, S, H, Q oraz ładunki BCL/CCL dla kn; "
                     "dla ka także współczynnik A).")
-        if x50_mm < est["floor_mm"]:
+        if est and x50_mm < est["floor_mm"]:
             st.warning(f"X50 z dopasowania ({x50_mm:.0f} mm) leży poniżej zasięgu wiarygodnej ekstrapolacji "
                        f"({est['floor_mm']:.0f} mm): ka jest niepewne.")
         st.caption("Uwaga: zdjęcie pokazuje powierzchnię hałdy, więc X50 bywa zawyżone, a n jest wrażliwe na "
@@ -199,8 +209,8 @@ def results_view(res, label, wt, bins):
             st.caption("Parametry dotyczą **powierzchni** hałdy widocznej ze zdjęcia, więc X50 bywa zawyżone "
                        "(grubsze kamienie na wierzchu, drobniejsze ukryte). n jest wrażliwe na zakres "
                        "dopasowania i wybór modelu segmentacji.")
-    if est:
-        kuzram_panel(est)
+    if res.annotations:                                   # drone mode
+        kuzram_panel(est, res)
     if res.bounds:
         import pandas as pd
         with st.expander("Szczegóły: zmierzone kamienie i granice niepewności", expanded=not est):

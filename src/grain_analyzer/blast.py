@@ -67,20 +67,23 @@ def xc_from_x50(x50: float, n: float) -> float:
     return x50 / math.log(2) ** (1 / n)
 
 
-def calibrate(b: BlastInputs, x50_measured_mm: float, n_measured: float) -> dict:
-    """Model prediction and the correction factors ka, kn for one blast.
+def calibrate(b: BlastInputs, x50_measured_mm: float | None, n_measured: float | None) -> dict:
+    """Model prediction and the correction factors ka, kn for one blast. ``x50_measured_mm`` /
+    ``n_measured`` may be None (no usable fit): then only the model prediction is returned.
     Entries are None where the inputs do not allow the computation."""
     k = b.powder_factor
     out = {"K": k, "n_model": uniformity_n(b), "A_assumed": b.rock_factor_a or None,
            "A_measured": None, "ka": None, "kn": None, "X50_model_cm": None, "xc_model_cm": None}
-    x50_cm = x50_measured_mm / 10
     if k and b.charge_per_hole_kg > 0 and b.rws > 0:
-        out["A_measured"] = x50_cm * k ** 0.8 / (b.charge_per_hole_kg ** (1 / 6) * (b.rws / 115) ** (-19 / 30))
+        if x50_measured_mm:
+            out["A_measured"] = (x50_measured_mm / 10) * k ** 0.8 / (
+                b.charge_per_hole_kg ** (1 / 6) * (b.rws / 115) ** (-19 / 30))
+            if b.rock_factor_a > 0:
+                out["ka"] = out["A_measured"] / b.rock_factor_a
         if b.rock_factor_a > 0:
-            out["ka"] = out["A_measured"] / b.rock_factor_a
             out["X50_model_cm"] = x50_model_cm(b.rock_factor_a, k, b.charge_per_hole_kg, b.rws)
             if out["n_model"]:
                 out["xc_model_cm"] = xc_from_x50(out["X50_model_cm"], out["n_model"])
-    if out["n_model"]:
+    if out["n_model"] and n_measured:
         out["kn"] = n_measured / out["n_model"]
     return out

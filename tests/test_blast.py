@@ -38,3 +38,12 @@ def test_calibration_round_trip_gives_unit_factors():
     # lower measured n -> kn < 1
     assert calibrate(b, x50, uniformity_n(b) * 0.7)["kn"] == pytest.approx(0.7)
     assert xc_from_x50(10.0, 1.0) == pytest.approx(10.0 / math.log(2))
+
+
+def test_calibrate_without_measurement_returns_only_the_prediction():
+    b = BlastInputs(burden_m=3.0, spacing_m=3.5, hole_diameter_mm=100.0, bench_height_m=10.0,
+                    charge_per_hole_kg=60.0, drilling_error_m=0.1, bottom_charge_m=1.0,
+                    column_charge_m=5.0, rock_factor_a=8.0)
+    out = calibrate(b, None, None)
+    assert out["ka"] is None and out["kn"] is None and out["A_measured"] is None
+    assert out["X50_model_cm"] == pytest.approx(27.06, abs=0.1) and out["n_model"] == pytest.approx(1.046, abs=0.002)
