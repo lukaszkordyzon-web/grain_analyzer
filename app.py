@@ -1,5 +1,6 @@
 """Streamlit UI:  streamlit run app.py"""
 import dataclasses
+import gc
 import sys
 from pathlib import Path
 
@@ -53,9 +54,20 @@ MODE_CLOSE = "Zbliżenie ze znacznikiem ArUco"
 MODE_DRONE = "Dron — zdjęcie całej hałdy"
 
 
-@st.cache_resource(show_spinner="Ładowanie modelu SAM…")
+@st.cache_resource(max_entries=1, show_spinner="Ładowanie modelu segmentacji…")
 def get_segmenter(key: str):
     return make_segmenter(key)
+
+
+def get_segmenter_exclusive(key: str):
+    """Keep ONE segmentation model in memory: free hosts have ~1 GB, and two models plus torch
+    got the app killed. Switching model drops the previous one first."""
+    last = st.session_state.get("last_segmenter")
+    if last and last != key:
+        get_segmenter.clear()
+        gc.collect()
+    st.session_state.last_segmenter = key
+    return get_segmenter(key)
 
 
 def pick_segmenter(label="Model segmentacji"):
@@ -218,7 +230,7 @@ if mode == MODE_CLOSE:
         try:
             with st.spinner("Segmentacja… (na CPU może potrwać minutę)"):
                 st.session_state.result = analyze(
-                    image, params, get_segmenter(sam_name),
+                    image, params, get_segmenter_exclusive(sam_name),
                     get_depth(DEPTH_MODELS[depth_name]) if use_depth else None)
             st.session_state.meta = (SIZE_METRICS[metric], weighting, bins)
         except ValueError as e:
@@ -415,7 +427,7 @@ else:
             else:
                 st.session_state.pop("seg_cache", None)
                 gc.collect()
-                seg = segment_drone(image, p, get_segmenter(sam_name), _roi,
+                seg = segment_drone(image, p, get_segmenter_exclusive(sam_name), _roi,
                                     progress=lambda f, t: bar.progress(f, t), model=sam_name)
                 st.session_state.seg_cache = (app_key, seg, max_side)
                 st.session_state.sec_per_tile = seg.seconds / max(seg.n_tiles, 1)

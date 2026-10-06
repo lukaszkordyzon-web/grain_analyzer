@@ -130,7 +130,8 @@ class UltralyticsSegmenter:
         r = model(np.ascontiguousarray(image_rgb[..., ::-1]), **kw)[0]     # ultralytics expects BGR
         if r.masks is None:
             return []
-        masks = _fit_masks(r.masks.data.cpu().numpy().astype(bool), image_rgb.shape[:2])
+        # no copy when the tensor is already bool on the CPU: hundreds of tile-sized masks add up
+        masks = _fit_masks(r.masks.data.cpu().numpy().astype(bool, copy=False), image_rgb.shape[:2])
         conf = (r.boxes.conf.cpu().numpy() if r.boxes is not None else np.ones(len(masks)))
         return [(m, float(c)) for m, c in zip(masks, conf)]
 
