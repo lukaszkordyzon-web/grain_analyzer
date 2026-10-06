@@ -13,7 +13,8 @@ from . import scale as scale_mod
 from .depth import DepthEstimator
 from .measure import SIZE_METRICS, depth_outliers, measure_grains
 from .segmentation import Segmenter, select_grain_masks
-from .stats import estimate_fines, fraction_table, passing_bounds, size_distribution
+from .stats import (completeness_limit, estimate_fines, fraction_table, passing_bounds,
+                    size_distribution)
 
 
 @dataclass
@@ -55,6 +56,7 @@ class AnalysisResult:
     bounds: dict | None = None            # area passing curves incl. unmeasured fines
     estimate: dict | None = None          # Rosin-Rammler estimate of the whole surface
     fractions: list | None = None         # surface share by size class
+    reliable_mm: float | None = None      # above this size detection is (nearly) complete
 
     @property
     def sizes(self) -> np.ndarray:
@@ -303,8 +305,17 @@ def measure_drone(seg: DroneSegmentation, p: DroneParams, head_xy=None, feet_xy=
     estimate = estimate_fines(bounds) if bounds else None
     fractions = (fraction_table(grains[col].to_numpy(), grains["area_mm2"].to_numpy(),
                                 roi_area_mm2, min_size_mm) if bounds else None)
+    reliable_mm = None
+    if len(grains):
+        reliable_mm, how = completeness_limit(grains[col].to_numpy(), min_size_mm)
+        notes.append(
+            f"Kamienie mniejsze niż ok. {reliable_mm / 10:.0f} cm są wykrywane niepełnie"
+            + (" (liczba kamieni spada poniżej tej wielkości, zamiast rosnąć)" if how == "turnover"
+               else " (oszacowanie przybliżone)")
+            + f"; frakcja {min_size_mm / 10:.0f}–{reliable_mm / 10:.0f} cm jest niedoszacowana.")
     return AnalysisResult(image, scale, [], grains, depth, col, perc, 0, contours, ann, notes,
-                          p.weighting, roi_area_mm2, min_size_mm, bounds, estimate, fractions)
+                          p.weighting, roi_area_mm2, min_size_mm, bounds, estimate, fractions,
+                          reliable_mm)
 
 
 def analyze_drone(image_rgb: np.ndarray, p: DroneParams, segmenter: Segmenter,

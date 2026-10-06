@@ -136,3 +136,18 @@ def test_overlay_colours_by_size_green_to_red_with_legend():
     assert (out[-12:, :40] != img[-12:, :40]).any()                     # legend drawn bottom-left
     plain = draw_overlay(res, thickness=3, color_by_size=False)
     assert tuple(plain[50, 70]) == (0, 255, 0)                          # old single-colour mode still there
+
+
+def test_completeness_limit_finds_turnover_of_a_leaky_detection():
+    from grain_analyzer.stats import completeness_limit
+    rng = np.random.default_rng(1)
+    d = 100 * (1 - rng.random(30000)) ** (-1 / 2.0)           # power-law sizes >= 100 (number grows to small)
+    keep = rng.random(len(d)) < np.clip((d - 100) / 150, 0, 1)    # detection loses stones below 250
+    lim, how = completeness_limit(d[keep][:1500], min_size_mm=110.0)
+    assert how == "turnover" and 150 < lim < 330
+    # too few stones -> fixed factor of the measurement limit
+    lim2, how2 = completeness_limit(d[keep][:20], min_size_mm=110.0)
+    assert how2 == "fallback" and lim2 == pytest.approx(110 * 1.7)
+    # counts that only grow towards small sizes: no turnover, fallback
+    lim3, how3 = completeness_limit(d[:1500], min_size_mm=110.0)
+    assert how3 == "fallback"

@@ -157,6 +157,11 @@ def plot_psd(result, label: str, log_x: bool = True):
     if result.min_size_mm:
         ax.axvline(result.min_size_mm, color=_MUTED, lw=1, ls=":")
         ax.text(result.min_size_mm, 101.5, " próg pomiaru", color=_INK, fontsize=8, va="bottom")
+        rel = getattr(result, "reliable_mm", None)
+        if rel and rel > result.min_size_mm:               # detection incomplete just above the limit
+            ax.axvspan(result.min_size_mm, rel, color="#e9b949", alpha=0.18, lw=0)
+            ax.text(np.sqrt(result.min_size_mm * rel), 55, "wykrywanie niepełne", rotation=90,
+                    ha="center", va="center", color=_INK, fontsize=8)
 
     for (name, val), p in zip(marks.items(), (10, 50, 90)):
         ax.axhline(p, color=_MUTED, lw=0.6, alpha=0.6)
