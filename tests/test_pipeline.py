@@ -151,3 +151,28 @@ def test_completeness_limit_finds_turnover_of_a_leaky_detection():
     # counts that only grow towards small sizes: no turnover, fallback
     lim3, how3 = completeness_limit(d[:1500], min_size_mm=110.0)
     assert how3 == "fallback"
+
+
+def test_psd_plot_keeps_the_axis_label_and_marks_estimates_orange():
+    import pickle  # noqa: F401  (only to keep the import block tidy for the test below)
+    import pandas as pd
+    from grain_analyzer import scale as sm
+    from grain_analyzer.pipeline import AnalysisResult
+    from grain_analyzer.stats import estimate_fines, passing_bounds
+    from grain_analyzer.viz import plot_psd
+    from test_drone import _rr_scene
+    d, a = _rr_scene(xc=240.0, n=0.95, d_min=100.0)
+    a = a * np.where(d < 400, np.clip((d - 100) / 300, 0, 1), 1.0)
+    b = passing_bounds(d, a, 1.0, 100.0)
+    est = estimate_fines(b, reliable_mm=400.0)
+    res = AnalysisResult(np.zeros((5, 5, 3), np.uint8), sm.ScaleResult(1.0, "x"), [],
+                         pd.DataFrame({"ecd_mm": d, "area_mm2": a}), None, "ecd_mm", {}, 0, [], {}, [],
+                         "area", 1.0, 100.0, b, est, [], 400.0)
+    fig = plot_psd(res, "Średnica ECD")
+    ax = fig.axes[0]
+    assert ax.get_xlabel() == "Średnica ECD [mm]"
+    assert any("strefa niepełnego wykrywania do 40 cm" in t.get_text() for t in ax.texts)
+    d50 = est["D"]["D50"]
+    assert d50 < 400.0                                        # an estimate inside the unreliable zone
+    dot = [ln for ln in ax.lines if ln.get_marker() == "o" and abs(ln.get_xdata()[0] - d50) < 1e-6][0]
+    assert dot.get_color() == "#e8743b"                       # estimates are orange, not blue

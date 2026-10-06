@@ -153,19 +153,19 @@ def plot_psd(result, label: str, log_x: bool = True):
                     ls=(0, (1, 2)), label="Skrajnie: całe niezmierzone = drobnica")
             ax.axvspan(x_left, d_min, color=_MUTED, alpha=0.08, lw=0)
         marks = est["D"] if est is not None else b["D_upper"]
-        mark_x0 = xs[0]
+        mark_x0 = getattr(result, "reliable_mm", None) or xs[0]
     else:
         xs, low = cumulative_passing(result.sizes, result.weighting)
         ax.plot(xs, low, color=_SERIES, lw=2, label="Zmierzone kamienie")
         marks, mark_x0 = passing_curve_percentiles(xs, low), 0
     if result.min_size_mm:
         ax.axvline(result.min_size_mm, color=_MUTED, lw=1, ls=":")
-        ax.text(result.min_size_mm, 101.5, " próg pomiaru", color=_INK, fontsize=8, va="bottom")
         rel = getattr(result, "reliable_mm", None)
+        top_label = " próg pomiaru"
         if rel and rel > result.min_size_mm:               # detection incomplete just above the limit
             ax.axvspan(result.min_size_mm, rel, color="#e9b949", alpha=0.18, lw=0)
-            ax.text(np.sqrt(result.min_size_mm * rel), 55, "wykrywanie niepełne", rotation=90,
-                    ha="center", va="center", color=_INK, fontsize=8)
+            top_label += f"  |  strefa niepełnego wykrywania do {rel / 10:.0f} cm"
+        ax.text(result.min_size_mm, 101.5, top_label, color=_INK, fontsize=8, va="bottom")
 
     for (name, val), p in zip(marks.items(), (10, 50, 90)):
         ax.axhline(p, color=_MUTED, lw=0.6, alpha=0.6)
