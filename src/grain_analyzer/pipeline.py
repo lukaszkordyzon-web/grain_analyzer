@@ -139,6 +139,7 @@ class DroneParams:
     size_metric: str = "ecd"
     weighting: str = "area"               # surface fraction by size (top-view standard)
     max_stone_mm: float = 3000.0          # larger "stones" are masks of shadow/wall; 0 = no cap
+    fit_from_mm: float = 0.0              # >0: fix the Rosin-Rammler fit threshold (same for all blasts)
     shadow_ratio: float = 0.6             # drop uniform patches darker than this x surroundings; 0 = off
     # guard: each tile = one SAM pass (slow, RAM-hungry); raise it on a strong machine
     max_tiles: int = field(default_factory=lambda: int(os.environ.get("GRAIN_MAX_TILES", "8")))
@@ -305,14 +306,16 @@ def measure_drone(seg: DroneSegmentation, p: DroneParams, head_xy=None, feet_xy=
     reliable_mm = None
     if len(grains):
         reliable_mm, how = completeness_limit(grains[col].to_numpy(), min_size_mm)
+        if p.fit_from_mm > 0:
+            reliable_mm, how = max(p.fit_from_mm, min_size_mm), "manual"
     estimate = estimate_fines(bounds, reliable_mm=reliable_mm) if bounds else None
     fractions = (fraction_table(grains[col].to_numpy(), grains["area_mm2"].to_numpy(),
                                 roi_area_mm2, min_size_mm) if bounds else None)
     if len(grains):
         notes.append(
             f"Kamienie mniejsze niż ok. {reliable_mm / 10:.0f} cm są wykrywane niepełnie"
-            + (" (liczba kamieni spada poniżej tej wielkości, zamiast rosnąć)" if how == "turnover"
-               else " (oszacowanie przybliżone)")
+            + {"turnover": " (liczba kamieni spada poniżej tej wielkości, zamiast rosnąć)",
+               "manual": " (próg ustawiony ręcznie)"}.get(how, " (oszacowanie przybliżone)")
             + f"; frakcja {min_size_mm / 10:.0f}–{reliable_mm / 10:.0f} cm jest niedoszacowana.")
     return AnalysisResult(image, scale, [], grains, depth, col, perc, 0, contours, ann, notes,
                           p.weighting, roi_area_mm2, min_size_mm, bounds, estimate, fractions,

@@ -449,3 +449,17 @@ def test_rr_x50_matches_percentile_and_is_exported():
     from grain_analyzer.stats import rr_percentile, rr_x50
     fit = {"xc": 240.0, "n": 0.95}
     assert rr_x50(fit) == pytest.approx(rr_percentile(fit, 50))
+
+
+def test_manual_fit_threshold_overrides_automatic_limit():
+    img = np.full((1500, 2000, 3), 150, np.uint8)
+    circles = [(300 + 90 * i, 300 + 60 * (i % 7), 20 + 3 * (i % 9)) for i in range(40)]
+    kw = dict(max_stone_mm=0.0, max_side=2000, reference="person", pitch_deg=90, focal_35mm=36.0,
+              tile=2000, max_area_frac=0.05)
+    head, feet = (1000, 700), (1000, 800)
+    auto = analyze_drone(img, DroneParams(**kw), Stub(circles, big=False), head, feet, (100, 100, 1900, 1400))
+    man = analyze_drone(img, DroneParams(fit_from_mm=300.0, **kw), Stub(circles, big=False),
+                        head, feet, (100, 100, 1900, 1400))
+    assert man.reliable_mm == pytest.approx(max(300.0, man.min_size_mm))
+    assert any("ręcznie" in n for n in man.notes)
+    assert not any("ręcznie" in n for n in auto.notes)
