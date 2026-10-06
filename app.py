@@ -40,6 +40,10 @@ def pick_segmenter(label="Model segmentacji"):
                        + ("" if av[k].tested else " (nieprzetestowany)"))
     if av[key].note:
         st.caption(av[key].note)
+    import importlib.util
+    if importlib.util.find_spec("ultralytics") is None:
+        st.caption("FastSAM, MobileSAM i SAM 2.1 nie są dostępne na tym serwerze: wymagają "
+                   "pakietu `ultralytics`, którego tu nie zainstalowano (patrz README).")
     return key
 
 
