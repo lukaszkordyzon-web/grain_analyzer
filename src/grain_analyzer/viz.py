@@ -13,13 +13,70 @@ from .stats import (cumulative_passing, histogram, passing_curve_percentiles,  #
                     rr_anchored_passing)
 
 
-def draw_overlay(result, show_ids: bool = False, thickness: int = 1) -> np.ndarray:
+def size_colors(sizes: np.ndarray, lo: float | None = None, hi: float | None = None):
+    """RGB colour per size on a green -> yellow -> red scale (log size). Small stones are green,
+    large red. The range ends at the 97th percentile so a few giants do not wash out the rest.
+    Returns (colours (N, 3) uint8, lo, hi)."""
+    s = np.asarray(sizes, float)
+    lo = float(np.min(s)) if lo is None else lo
+    hi = float(np.percentile(s, 97)) if hi is None else hi
+    hi = max(hi, lo * 1.01)
+    t = np.clip((np.log(np.maximum(s, 1e-9)) - np.log(lo)) / (np.log(hi) - np.log(lo)), 0, 1)
+    hsv = np.zeros((len(s), 1, 3), np.uint8)
+    hsv[:, 0, 0] = (60 * (1 - t)).astype(np.uint8)           # OpenCV hue: 60 = green ... 0 = red
+    hsv[:, 0, 1:] = 255
+    return cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)[:, 0, :], lo, hi
+
+
+def _draw_legend(out: np.ndarray, lo: float, hi: float) -> None:
+    """Colour bar with the size range (cm) in the bottom-left corner."""
+    h, w = out.shape[:2]
+    bar_w, bar_h = int(0.26 * w), max(10, int(0.02 * w))
+    x0, y0 = int(0.02 * w), h - int(0.02 * w) - bar_h
+    scale = max(0.5, w / 1800)
+    pad = int(8 * scale) + 4
+    cv2.rectangle(out, (x0 - pad, y0 - int(30 * scale) - pad), (x0 + bar_w + pad, y0 + bar_h + int(26 * scale) + pad),
+                  (0, 0, 0), -1)
+    grad = np.linspace(0, 1, bar_w)
+    cols, _, _ = size_colors(np.exp(np.log(lo) + grad * (np.log(hi) - np.log(lo))), lo, hi)
+    out[y0:y0 + bar_h, x0:x0 + bar_w] = cols[None, :, :]
+    font, th = cv2.FONT_HERSHEY_SIMPLEX, max(1, int(scale))
+    cv2.putText(out, "rozmiar kamienia (ECD)", (x0, y0 - int(10 * scale)), font, 0.5 * scale,
+                (255, 255, 255), th, cv2.LINE_AA)
+    for frac in (0.0, 0.5, 1.0):
+        v = np.exp(np.log(lo) + frac * (np.log(hi) - np.log(lo))) / 10          # mm -> cm
+        label = f"{v:.0f} cm" if v >= 10 else f"{v:.1f} cm"
+        (tw, _), _ = cv2.getTextSize(label, font, 0.45 * scale, th)
+        tx = int(x0 + frac * bar_w - frac * tw)
+        cv2.putText(out, label, (tx, y0 + bar_h + int(20 * scale)), font, 0.45 * scale,
+                    (255, 255, 255), th, cv2.LINE_AA)
+
+
+def draw_overlay(result, show_ids: bool = False, thickness: int | None = None,
+                 color_by_size: bool = True, legend: bool = True) -> np.ndarray:
+    """Stone outlines on the photo. With ``color_by_size`` every outline gets a colour from green
+    (small) to red (large) on a log scale, with a legend; each outline has a dark casing so it
+    stays visible on both light and dark ground. ``thickness`` defaults to ~1/700 of the image."""
     out = result.image.copy()
+    h, w = out.shape[:2]
+    thickness = thickness or max(2, round(max(h, w) / 700))
     if result.contours is not None:
-        cv2.drawContours(out, result.contours, -1, (0, 255, 0), thickness)
-    for m in result.masks:
-        cnts, _ = cv2.findContours(m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        cv2.drawContours(out, cnts, -1, (0, 255, 0), thickness)
+        contours = list(result.contours)
+    else:
+        contours = []
+        for m in result.masks:
+            cnts, _ = cv2.findContours(m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            contours.append(max(cnts, key=cv2.contourArea) if cnts else None)
+    sizes = result.grains[result.size_column].to_numpy() if len(result.grains) else np.array([])
+    paint = color_by_size and len(sizes) == len(contours) and len(sizes) > 0
+    if paint:
+        colors, lo, hi = size_colors(sizes)
+    for i, c in enumerate(contours):
+        if c is None:
+            continue
+        cv2.drawContours(out, [c], -1, (0, 0, 0), thickness + 2, cv2.LINE_AA)       # casing
+        col = tuple(int(v) for v in colors[i]) if paint else (0, 255, 0)
+        cv2.drawContours(out, [c], -1, col, thickness, cv2.LINE_AA)
     ann = result.annotations
     if "roi" in ann:
         x0, y0, x1, y1 = ann["roi"]
@@ -32,6 +89,8 @@ def draw_overlay(result, show_ids: bool = False, thickness: int = 1) -> np.ndarr
         for _, r in result.grains.iterrows():
             cv2.putText(out, str(int(r["id"])), (int(r["cx_px"]) - 6, int(r["cy_px"]) + 4),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 0), 1, cv2.LINE_AA)
+    if paint and legend:
+        _draw_legend(out, lo, hi)
     return out
 
 

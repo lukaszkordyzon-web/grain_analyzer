@@ -115,3 +115,24 @@ def test_device_override_and_tile_limit_env(monkeypatch):
     assert DroneParams().max_tiles == 8                  # hosted default
     monkeypatch.setenv("GRAIN_MAX_TILES", "40")
     assert DroneParams().max_tiles == 40                 # strong local machine
+
+
+def test_overlay_colours_by_size_green_to_red_with_legend():
+    import pandas as pd
+    from grain_analyzer import scale as sm
+    from grain_analyzer.pipeline import AnalysisResult
+    from grain_analyzer.viz import draw_overlay, size_colors
+    img = np.full((400, 600, 3), 90, np.uint8)
+    small = np.array([[[50, 50]], [[90, 50]], [[90, 90]], [[50, 90]]], np.int32)         # 40x40
+    big = np.array([[[200, 200]], [[330, 200]], [[330, 330]], [[200, 330]]], np.int32)   # 130x130
+    g = pd.DataFrame({"id": [1, 2], "ecd_mm": [50.0, 400.0], "cx_px": [70.0, 265.0], "cy_px": [70.0, 265.0]})
+    res = AnalysisResult(img, sm.ScaleResult(1.0, "x"), [], g, None, "ecd_mm", {}, 0, [small, big])
+    cols, lo, hi = size_colors(g["ecd_mm"].to_numpy())
+    assert cols[0][1] > cols[0][0] and cols[1][0] > cols[1][1]        # small: green > red; large: red > green
+    out = draw_overlay(res, thickness=3)
+    px_small = out[50, 70]                                              # on the small stone's top edge
+    px_big = out[200, 265]
+    assert px_small[1] > px_small[0] and px_big[0] > px_big[1]
+    assert (out[-12:, :40] != img[-12:, :40]).any()                     # legend drawn bottom-left
+    plain = draw_overlay(res, thickness=3, color_by_size=False)
+    assert tuple(plain[50, 70]) == (0, 255, 0)                          # old single-colour mode still there

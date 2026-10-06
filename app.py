@@ -129,8 +129,12 @@ def results_view(res, label, wt, bins):
 
     t1, t2, t3 = st.tabs(["Kontury", "Krzywa uziarnienia", "Dane"])
     with t1:
-        ids = st.checkbox("Numery ziaren")
-        st.image(draw_overlay(res, ids), width="stretch")
+        c1, c2, c3 = st.columns([1, 1, 2])
+        ids = c1.checkbox("Numery ziaren")
+        by_size = c2.checkbox("Kolor wg rozmiaru", True,
+                              help="Zielony = małe kamienie, czerwony = duże (skala logarytmiczna).")
+        thick = c3.slider("Grubość konturu", 1, 8, 3)
+        st.image(draw_overlay(res, ids, thick, by_size), width="stretch")
         if res.depth is not None and not res.annotations:
             with st.expander("Mapa głębi (względna)"):
                 st.image(depth_preview(res.depth), width="stretch")
