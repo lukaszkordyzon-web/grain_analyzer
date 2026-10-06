@@ -419,7 +419,27 @@ def test_fit_uses_reliable_part_and_gives_two_scenarios():
     est = estimate_fines(b, reliable_mm=400.0)
     assert est["fit_on"] == "reliable"
     assert est["fit"]["n"] == pytest.approx(0.95, rel=0.12)
-    assert est["D_alt"]["D50"] == pytest.approx(truth[50], rel=0.15)      # plain RR from the reliable part
-    assert est["D"]["D50"] < est["D_alt"]["D50"]                            # "all unmeasured is fines" is lower
+    assert est["D"]["D50"] == pytest.approx(truth[50], rel=0.15)          # main = plain RR from the reliable part
+    assert est["D_low"]["D50"] <= est["D"]["D50"]                          # "all unmeasured is fines" is lower
     est_all = estimate_fines(b)                                              # old behaviour: fit on everything
     assert abs(est_all["fit"]["n"] - 0.95) > abs(est["fit"]["n"] - 0.95)     # the plateau distorted it
+
+
+def test_main_curve_never_exceeds_what_was_measured():
+    """The fitted curve may not lie above the measured ceiling: below the limit that is the unmeasured
+    share u, above it the "unmeasured = fines" curve."""
+    from grain_analyzer.stats import (estimate_fines, passing_bounds, rr_main_passing, rr_passing)
+    d, a = _rr_scene(xc=150.0, n=1.1, d_min=200.0)
+    a = np.where(d < 300, a * 2.2, a)                  # extra stones just above the limit -> u is small
+    b = passing_bounds(d, a, 1.0, 200.0)
+    u = b["unmeasured_fraction"]
+    est = estimate_fines(b, reliable_mm=300.0)
+    assert rr_passing(est["fit"], 200.0) > 100 * u + 1                     # the plain fit would break the cap
+    grid = np.geomspace(est["floor_mm"], 300.0, 60)
+    main = rr_main_passing(est, grid, b)
+    ceiling = np.where(grid < 200.0, 0, np.interp(grid, b["sizes"], b["upper"]))
+    assert (main[grid >= 200.0] <= ceiling[grid >= 200.0] + 1e-9).all()    # above the limit: under the measured curve
+    below = grid < 200.0
+    assert main[below].max() <= 100 * u + 1e-9                             # below it: never more than u
+    assert (np.diff(main) >= -1e-9).all()                                  # still a passing curve (monotonic)
+    assert est["D_low"]["D50"] <= est["D"]["D50"] or np.isnan(est["D"]["D50"])
