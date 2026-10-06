@@ -169,6 +169,37 @@ def kuzram_panel(est, res):
                            "kalibracja_kuzram.csv", "text/csv")
 
 
+def comparison_table():
+    """Side-by-side summary of all analysed photos (2+), with one CSV."""
+    import pandas as pd
+    done = [(k, v[0]) for k, v in st.session_state.get("results", {}).items() if k[0] == MODE_DRONE]
+    if len(done) < 2:
+        return
+    rows = []
+    for (_, name, _), r in done:
+        est = r.estimate
+        D = est["D"] if est else {}
+        fit = est["fit"] if est else None
+        rows.append({
+            "Zdjęcie": name,
+            "D10 [mm]": D.get("D10", r.percentiles.get("D10")),
+            "D50 [mm]": D.get("D50", r.percentiles.get("D50")),
+            "D90 [mm]": D.get("D90", r.percentiles.get("D90")),
+            "X50 RR [mm]": rr_x50(fit) if fit else None,
+            "n RR": fit["n"] if fit else None,
+            "R²": fit["r2"] if fit else None,
+            "dopasowano od [cm]": (r.reliable_mm / 10) if (est and r.reliable_mm) else None,
+            "kamieni": len(r.grains),
+        })
+    df = pd.DataFrame(rows).set_index("Zdjęcie")
+    with st.expander(f"Porównanie zdjęć ({len(done)})", expanded=True):
+        show_table(df.round(2))
+        st.caption("Aby porównanie było uczciwe, ustaw w „Zaawansowane” ten sam próg dopasowania "
+                   "Rosina–Rammlera dla wszystkich zdjęć i przelicz je ponownie.")
+        st.download_button("Pobierz porównanie (CSV)", df.round(3).to_csv().encode("utf-8-sig"),
+                           "porownanie.csv", "text/csv")
+
+
 def show_table(df):
     """Mała tabela z jawną wysokością — automatyczna ucina ostatnie wiersze."""
     st.dataframe(df, width="content", height=(len(df) + 1) * 35 + 3)
@@ -287,10 +318,26 @@ with st.sidebar:
         st.json(version_info())
     mode = st.radio("Tryb", [MODE_CLOSE, MODE_DRONE])
 
-upload = st.file_uploader("Wgraj zdjęcie", type=["jpg", "jpeg", "png", "tif", "tiff", "bmp"])
-if upload is None:
+uploads = st.file_uploader("Wgraj zdjęcie (może być kilka)", type=["jpg", "jpeg", "png", "tif", "tiff", "bmp"],
+                           accept_multiple_files=True)
+if not uploads:
     st.info("Wgraj zdjęcie, aby rozpocząć. Dla zdjęć z drona użyj oryginału (z metadanymi).")
     st.stop()
+if len(uploads) > 1:
+    names = [u.name for u in uploads]
+    upload = uploads[st.radio("Które zdjęcie analizujesz?", range(len(uploads)), horizontal=True,
+                              format_func=lambda i: names[i] if names.count(names[i]) == 1
+                              else f"{i + 1}. {names[i]}")]
+else:
+    upload = uploads[0]
+FILE_KEY = (mode, upload.name, upload.size)
+
+
+def set_result(res, meta):
+    """Results are kept per photo (light objects, no masks), so photos can be compared."""
+    st.session_state.setdefault("results", {})[FILE_KEY] = (res, meta)
+
+
 raw = upload.getvalue()
 image = np.array(ImageOps.exif_transpose(Image.open(upload)).convert("RGB"))
 H, W = image.shape[:2]
@@ -331,7 +378,6 @@ if mode == MODE_CLOSE:
     st.image(image, caption=f"{W}×{H} px", width=400)
     if st.button("Analizuj", type="primary"):
         import gc
-        st.session_state.pop("result", None)
         gc.collect()
         params = Params(max_side=max_side, marker_size_mm=marker_mm, marker_dict=marker_dict,
                         marker_id=marker_id, manual_mm_per_px=mm_per_px, min_area_px=min_area,
@@ -340,10 +386,10 @@ if mode == MODE_CLOSE:
                         size_metric=metric, weighting=weighting)
         try:
             with st.spinner("Segmentacja… (na CPU może potrwać minutę)"):
-                st.session_state.result = analyze(
+                set_result(analyze(
                     image, params, get_segmenter_exclusive(sam_name),
-                    get_depth(DEPTH_MODELS[depth_name]) if use_depth else None)
-            st.session_state.meta = (SIZE_METRICS[metric], weighting, bins)
+                    get_depth(DEPTH_MODELS[depth_name]) if use_depth else None),
+                    (SIZE_METRICS[metric], weighting, bins))
         except ValueError as e:
             st.error(str(e))
             st.stop()
@@ -401,6 +447,10 @@ else:
             shadow_on = st.checkbox("Odrzucaj cienie (ciemne, jednolite plamy)", True,
                                     help="Rzucany cień obok głazu bywa obrysowany jak kamień. "
                                          "Ciemny kamień w zacienionym miejscu zostaje.")
+            fit_cm = st.number_input(
+                "Próg dopasowania Rosina–Rammlera [cm] (0 = automatycznie)", 0, 200, 0, 5,
+                help="Rozkład Rosina–Rammlera jest dopasowywany tylko do kamieni większych niż ten próg. "
+                     "Ustaw ten sam próg (np. 25 cm) dla wszystkich zdjęć, aby wyniki były porównywalne.")
             max_stone_m = st.number_input("Maks. rozmiar kamienia [m]", 0.5, 20.0, 3.0, 0.5,
                                           help="Większe „kamienie” to zwykle maski cienia lub ściany.")
 
@@ -414,11 +464,10 @@ else:
 
     # ---- click-to-mark -------------------------------------------------------------
     up_id = (upload.name, upload.size)
-    if st.session_state.get("up_id") != up_id:
-        st.session_state.update(up_id=up_id, pts={}, last_click=None, _next_step=0)
-        st.session_state.pop("result", None)
+    if st.session_state.get("up_id") != up_id:     # another photo: its own points; heavy cache dropped
+        st.session_state.update(up_id=up_id, last_click=None, _next_step=0)
         st.session_state.pop("seg_cache", None)
-    pts = st.session_state.pts
+    pts = st.session_state.setdefault("pts_by", {}).setdefault(up_id, {})
     ROI_STEPS = [("roi0", "Obszar hałdy: lewy górny róg"), ("roi1", "Obszar hałdy: prawy dolny róg")]
     STEPS = {
         "person": [("head", "Czubek głowy człowieka"), ("feet", "Stopy człowieka")] + ROI_STEPS,
@@ -475,7 +524,7 @@ else:
                        wall_slope_deg=wall_slope, marker_size_mm=marker_mm, marker_dict=marker_dict,
                        pitch_deg=pitch, focal_35mm=focal, tile=tile, min_diameter_px=min_d,
                        max_area_frac=max_frac, size_metric=metric, weighting=weighting,
-                       shadow_ratio=0.6 if shadow_on else 0.0, max_stone_mm=max_stone_m * 1000,
+                       shadow_ratio=0.6 if shadow_on else 0.0, fit_from_mm=fit_cm * 10.0, max_stone_mm=max_stone_m * 1000,
                        max_tiles=max(DroneParams().max_tiles, spec.max_tiles))
     if "roi0" in pts and "roi1" in pts:
         _roi = (min(pts["roi0"][0], pts["roi1"][0]), min(pts["roi0"][1], pts["roi1"][1]),
@@ -531,7 +580,6 @@ else:
 
     if st.button("Analizuj", type="primary", disabled=not ready):
         import gc
-        st.session_state.pop("result", None)
         p = dataclasses.replace(base, max_side=max_side)
         cache = st.session_state.get("seg_cache")
         bar = st.progress(0.0, "Start…")
@@ -545,15 +593,16 @@ else:
                                     progress=lambda f, t: bar.progress(f, t), model=sam_name)
                 st.session_state.seg_cache = (app_key, seg, max_side)
                 st.session_state.sec_per_tile = seg.seconds / max(seg.n_tiles, 1)
-            st.session_state.result = measure_drone(seg, p, pts.get("head"), pts.get("feet"))
-            st.session_state.meta = (SIZE_METRICS[metric], weighting, bins)
+            set_result(measure_drone(seg, p, pts.get("head"), pts.get("feet")),
+                       (SIZE_METRICS[metric], weighting, bins))
         except ValueError as e:
             st.error(str(e))
             st.stop()
         finally:
             bar.empty()
 
-res = st.session_state.get("result")
-if res is not None:
-    label, wt, bins = st.session_state.meta
+comparison_table()
+_stored = st.session_state.get("results", {}).get(FILE_KEY)
+if _stored is not None:
+    res, (label, wt, bins) = _stored
     results_view(res, label, wt, bins)
