@@ -25,6 +25,30 @@ from grain_analyzer.viz import depth_preview, draw_overlay, plot_histogram, plot
 st.set_page_config(page_title="Analiza ziaren", layout="wide")
 st.title("Analiza wielkości ziaren")
 
+def version_info() -> dict:
+    """What this deployment is actually running (branch, commit, key packages)."""
+    import importlib.metadata as md
+    import subprocess
+
+    def pkg(name):
+        try:
+            return md.version(name)
+        except Exception:
+            return "brak"
+
+    def git(*args):
+        try:
+            return subprocess.run(["git", *args], capture_output=True, text=True, timeout=3,
+                                  cwd=Path(__file__).parent).stdout.strip() or "?"
+        except Exception:
+            return "?"
+
+    return {"gałąź (git)": git("rev-parse", "--abbrev-ref", "HEAD"),
+            "commit": git("rev-parse", "--short", "HEAD"),
+            "python": sys.version.split()[0], "ultralytics": pkg("ultralytics"),
+            "torch": pkg("torch"), "transformers": pkg("transformers"), "streamlit": pkg("streamlit")}
+
+
 MODE_CLOSE = "Zbliżenie ze znacznikiem ArUco"
 MODE_DRONE = "Dron — zdjęcie całej hałdy"
 
@@ -132,6 +156,8 @@ def results_view(res, label, wt, bins):
 with st.sidebar:
     from grain_analyzer.device import describe_device
     st.caption(f"Obliczenia: {describe_device()}")
+    with st.expander("Informacje o wersji"):
+        st.json(version_info())
     mode = st.radio("Tryb", [MODE_CLOSE, MODE_DRONE])
 
 upload = st.file_uploader("Wgraj zdjęcie", type=["jpg", "jpeg", "png", "tif", "tiff", "bmp"])
