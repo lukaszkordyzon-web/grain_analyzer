@@ -302,12 +302,13 @@ def measure_drone(seg: DroneSegmentation, p: DroneParams, head_xy=None, feet_xy=
     bounds = (passing_bounds(grains[col].to_numpy(), grains["area_mm2"].to_numpy(),
                              roi_area_mm2, min_size_mm)
               if len(grains) and p.weighting == "area" else None)
-    estimate = estimate_fines(bounds) if bounds else None
-    fractions = (fraction_table(grains[col].to_numpy(), grains["area_mm2"].to_numpy(),
-                                roi_area_mm2, min_size_mm) if bounds else None)
     reliable_mm = None
     if len(grains):
         reliable_mm, how = completeness_limit(grains[col].to_numpy(), min_size_mm)
+    estimate = estimate_fines(bounds, reliable_mm=reliable_mm) if bounds else None
+    fractions = (fraction_table(grains[col].to_numpy(), grains["area_mm2"].to_numpy(),
+                                roi_area_mm2, min_size_mm) if bounds else None)
+    if len(grains):
         notes.append(
             f"Kamienie mniejsze niż ok. {reliable_mm / 10:.0f} cm są wykrywane niepełnie"
             + (" (liczba kamieni spada poniżej tej wielkości, zamiast rosnąć)" if how == "turnover"

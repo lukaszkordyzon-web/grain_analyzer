@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
 from .stats import (cumulative_passing, histogram, passing_curve_percentiles,  # noqa: E402
-                    rr_anchored_passing)
+                    rr_anchored_passing, rr_passing)
 
 
 def size_colors(sizes: np.ndarray, lo: float | None = None, hi: float | None = None):
@@ -146,7 +146,10 @@ def plot_psd(result, label: str, log_x: bool = True):
             x_left = est["floor_mm"]
             grid = np.geomspace(x_left, xs[0], 80)
             ax.plot(grid, rr_anchored_passing(fit, grid, xs[0], b["unmeasured_fraction"]),
-                    color=_EST, lw=2, label="Szacunek poniżej progu (Rosin–Rammler)")
+                    color=_EST, lw=2, label="Niezmierzone = drobnica (kształt Rosina–Rammlera)")
+            grid2 = np.geomspace(x_left, est["reliable_mm"] or xs[0], 80)
+            ax.plot(grid2, rr_passing(fit, grid2), color=_EST, lw=1.6, ls=(0, (4, 3)),
+                    label="Brakujące kamienie: czysty Rosin–Rammler z części wiarygodnej")
             ax.axvspan(x_left, xs[0], color=_MUTED, alpha=0.08, lw=0)
         marks = est["D"] if est is not None else b["D_upper"]
         mark_x0 = xs[0]
@@ -167,8 +170,11 @@ def plot_psd(result, label: str, log_x: bool = True):
         ax.axhline(p, color=_MUTED, lw=0.6, alpha=0.6)
         if np.isfinite(val):
             ax.plot([val], [p], "o", ms=6, color=_EST if val < mark_x0 else _SERIES, mec="none")
-            ax.annotate(f"{name} = {val:.0f} mm" + (" (szac.)" if val < mark_x0 else ""), (val, p),
-                        xytext=(6, -12), textcoords="offset points", color=_INK, fontsize=9)
+            alt = est["D_alt"][name] if (est is not None and val < mark_x0) else None
+            txt = (f"{name} = {val:.0f}–{alt:.0f} mm (szac.)" if alt is not None and np.isfinite(alt)
+                   and abs(alt - val) > 0.03 * val else
+                   f"{name} = {val:.0f} mm" + (" (szac.)" if val < mark_x0 else ""))
+            ax.annotate(txt, (val, p), xytext=(6, -12), textcoords="offset points", color=_INK, fontsize=9)
     x_min = min(v for v in (x_left, xs.min()) if v is not None)
     if log_x:
         ax.set_xscale("log")

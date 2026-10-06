@@ -100,17 +100,27 @@ def results_view(res, label, wt, bins):
     heads = est["D"] if est else res.percentiles
     c = st.columns(5)
     c[0].metric("Zmierzone kamienie", len(res.grains))
+
+    def d_text(k, v):
+        if not est:
+            return f"{v:.1f} mm"
+        if not np.isfinite(v):
+            return f"< {est['floor_mm']:.0f} mm"
+        alt = est["D_alt"][k]
+        return f"{v:.0f}–{alt:.0f} mm" if np.isfinite(alt) and abs(alt - v) > 0.03 * v else f"{v:.0f} mm"
+
     for col, (k, v) in zip(c[1:4], heads.items()):
-        col.metric(k + (" (szacunek)" if est else ""),
-                   f"{v:.1f} mm" if np.isfinite(v) else f"< {est['floor_mm']:.0f} mm")
+        col.metric(k + (" (szacunek)" if est else ""), d_text(k, v))
     c[4].metric("Skala (mediana)", f"{res.scale.mm_per_px:.3f} mm/px", res.scale.method,
                 delta_color="off")
     if est:
-        st.caption("D10/D50/D90 to **szacunek dla całej powierzchni hałdy**, w tym drobnicy, "
-                   "której nie widać na zdjęciu (ekstrapolacja rozkładu Rosina–Rammlera z "
-                   f"kamieni większych niż {res.min_size_mm:.0f} mm; dopasowanie R² = "
-                   f"{est['fit']['r2']:.2f}). Wartości poniżej {est['floor_mm']:.0f} mm nie są podawane "
-                   "(zbyt daleka ekstrapolacja). Szczegóły i granice niepewności poniżej.")
+        st.caption("D10/D50/D90 to **szacunek dla całej powierzchni hałdy**, w tym drobnicy, której nie "
+                   f"widać na zdjęciu. Rosin–Rammler jest dopasowany tylko do wiarygodnej części krzywej "
+                   f"(kamienie ≥ {est['reliable_mm'] / 10 if est['reliable_mm'] else res.min_size_mm / 10:.0f} cm; "
+                   f"R² = {est['fit']['r2']:.2f}). **Podany jest zakres dwóch scenariuszy:** niższa wartość "
+                   "to „niezmierzone = drobnica poniżej progu”, wyższa to „tuż nad progiem brakuje wykrytych "
+                   f"kamieni”. Wartości poniżej {est['floor_mm']:.0f} mm nie są podawane (zbyt daleka "
+                   "ekstrapolacja). Dane same nie rozstrzygają, który scenariusz jest prawdziwy.")
     if res.n_rejected_depth:
         st.caption(f"Odrzucono wg głębi: {res.n_rejected_depth}")
     for n in res.notes:
@@ -136,7 +146,8 @@ def results_view(res, label, wt, bins):
             table = {"D": list(d_lo), "dolna granica [mm]": [f"{v:.0f}" for v in d_lo.values()],
                      "górna granica [mm]": [_fmt(d_up[k], res.min_size_mm) for k in d_lo]}
             if est:
-                table["szacunek [mm]"] = [_fmt(est["D"][k], est["floor_mm"]) for k in d_lo]
+                table["szacunek: niezmierzone = drobnica [mm]"] = [_fmt(est["D"][k], est["floor_mm"]) for k in d_lo]
+                table["szacunek: brakujące kamienie [mm]"] = [_fmt(est["D_alt"][k], est["floor_mm"]) for k in d_lo]
             st.dataframe(pd.DataFrame(table).set_index("D"), width="content")
 
     t1, t2, t3 = st.tabs(["Kontury", "Krzywa uziarnienia", "Dane"])
